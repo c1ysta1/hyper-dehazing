@@ -5,27 +5,6 @@
 
 ## 仓库结构
 
-```
-├── models/
-│   ├── diffusion/          # 阶段3核心：HSIAutoEncoder、条件UNet(conditional_ldm_phase3.py)、DDPM
-│   ├── physics/            # 阶段4候选模块：ASM / 逐波段条件注入（被证伪/待验路线）
-│   └── psgnet/             # 阶段2基线：PSGNet 全监督模型
-├── scripts/
-│   ├── rshpdid_dataset.py          # 数据集加载（配对规则、懒加载）
-│   ├── train_psgnet_phase2.py      # 阶段2：PSGNet 基线训练
-│   ├── test_psgnet_phase2.py       # 阶段2：PSGNet 评测
-│   ├── train_conditional_ldm_phase3_full.py  # 阶段3：条件LDM(FiLM) 训练
-│   ├── eval_ddim_guidance.py       # DDIM 少步采样 + 测试时 DCP 物理引导评测
-│   ├── eval_physics_guidance.py    # 100 步 DDPM + 物理引导评测
-│   └── ...                         # 其余为历史实验脚本（可忽略）
-├── run_retrain.py           # 一键重训编排：AE → 条件LDM(FiLM) → DDIM评测
-├── run_retrain_step2.py     # 编排后半段（跳过已训 AE）
-├── serve.py                 # 训练进度实时监控服务（标准库 http.server，端口 8010）
-└── webui/                   # 监控网页（dashboard + 各阶段详情页，每 4s 轮询）
-```
-
-**不入库**（体积大/生成物）：`data/`、`checkpoints/`、`logs/`、`results/`、`__pycache__/`。
-
 ## 数据准备
 
 数据集来自 HuggingFace [nikos74/RSyntHyperPDID](https://huggingface.co/datasets/nikos74/RSyntHyperPDID)（或 hf-mirror 镜像），解压后按如下目录放置：
@@ -105,6 +84,7 @@ python serve.py              # 启动 http://localhost:8010
 ## 技术要点与已知问题
 
 - 扩散模型天花板受 AE 重建上界限制（latent 压缩极限）；扩散采样环节仍有压缩空间（方向 B 待攻关）
-- latent 缓存落盘为**未归一化** latent，评测脚本加载后须用 `z_stats` 做 `(z-mean)/std` 归一化（eval_ddim_guidance.py 已内置）
-- DDIM 的 `x0_pred` **不可** clamp 到 [-1,1]（latent 空间值域远超图像域，clamp 会致多步采样崩塌）
+- latent 缓存落盘为**未归一化** latent，评测脚本加载后须用 `z_stats` 做 `(z-mean)/std` 归一化（eval\_ddim\_guidance.py 已内置）
+- DDIM 的 `x0_pred` **不可** clamp 到 \[-1,1]（latent 空间值域远超图像域，clamp 会致多步采样崩塌）
 - 测试时物理引导（DCP 梯度）训练零改动，仅在 `t ≤ guide_start_t` 且 `s>0` 时生效
+
