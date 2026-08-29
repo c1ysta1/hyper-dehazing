@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PSGNet 阶段二训练实时进度</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 24px; }
+  .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px;
+          border: 1px solid #334155; }
+  h1 { font-size: 20px; margin-bottom: 4px; color: #f1f5f9; }
+  .sub { color: #94a3b8; font-size: 13px; margin-bottom: 16px; }
+  .stat-grid { display: flex; gap: 16px; flex-wrap: wrap; }
+  .stat { flex: 1; min-width: 140px; background: #0f172a; border-radius: 10px; padding: 14px 16px;
+          border: 1px solid #334155; }
+  .stat .label { font-size: 12px; color: #94a3b8; }
+  .stat .value { font-size: 26px; font-weight: 700; margin-top: 4px; }
+  .stat .value.green { color: #4ade80; }
+  .stat .value.blue { color: #60a5fa; }
+  .stat .value.amber { color: #fbbf24; }
+  .bar-wrap { margin-top: 12px; background: #0f172a; border-radius: 8px; height: 18px; overflow: hidden;
+              border: 1px solid #334155; }
+  .bar { height: 100%; background: linear-gradient(90deg, #3b82f6, #8b5cf6); width: 0%;
+         transition: width 0.5s; }
+  .bar-label { position: relative; font-size: 11px; color: #e2e8f0; text-align: center;
+               line-height: 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-weight: 500; }
+  td:first-child, th:first-child { text-align: left; }
+  tr:hover td { background: #1e293b; }
+  .log-box { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: 12px;
+             background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px;
+             max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
+  .status { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px;
+            font-size: 13px; font-weight: 600; }
+  .status.running { background: #16a34a22; color: #4ade80; border: 1px solid #16a34a55; }
+  .status.done { background: #3b82f622; color: #60a5fa; border: 1px solid #3b82f655; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  svg { width: 100%; height: 220px; }
+  #chart-title { font-size: 14px; color: #94a3b8; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>PSGNet 阶段二 · 高光谱图像去雾训练</h1>
+    <div class="sub">数据集: RSyntHyperPDID (182 波段, 256×256) · data/test 临时训练 · GPU: RTX 5090</div>
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+      <span class="status running" id="status"><span class="dot"></span>训练中</span>
+      <span class="sub" id="last-update" style="margin:0;">最后更新: --</span>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Epoch</div><div class="value blue" id="epoch">-- / 100</div></div>
+      <div class="stat"><div class="label">Train Loss</div><div class="value" id="train-loss">--</div></div>
+      <div class="stat"><div class="label">Test Loss</div><div class="value" id="test-loss">--</div></div>
+      <div class="stat"><div class="label">Test PSNR (最优)</div><div class="value green" id="best-psnr">--</div></div>
+    </div>
+    <div style="margin-top:14px;">
+      <div style="display:flex; justify-content:space-between; font-size:12px; color:#94a3b8; margin-bottom:4px;">
+        <span>训练进度</span><span id="pct">0%</span>
+      </div>
+      <div class="bar-wrap"><div class="bar" id="bar"></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="chart-title">Test PSNR 曲线</div>
+    <svg id="chart" viewBox="0 0 800 220" preserveAspectRatio="none"></svg>
+  </div>
+
+  <div class="card">
+    <h1 style="font-size:16px;">Epoch 明细</h1>
+    <div class="log-box" id="log-table"></div>
+  </div>
+
+<script>
+  // 动态定位当前阶段2训练日志：从 /api/status 取最新 log 路径，避免硬编码 run 名
+  let LOG_URL = '/logs/psgnet_phase2_0821_1523/train_log.txt';
+  let lastRows = [];
+  async function locateLog() {
+    try {
+      const st = await (await fetch('/api/status?t=' + Date.now())).json();
+      const p2 = st.phases && st.phases.phase2;
+      if (p2 && p2.log && p2.log.indexOf('train_log.txt') >= 0) {
+        LOG_URL = p2.log;
+      }
+    } catch (e) { /* 保持默认 */ }
+  }
+  async function refresh() {
+    try {
+      await locateLog();
+      const res = await fetch(LOG_URL + '?t=' + Date.now());
+      const text = await res.text();
+      const lines = text.split('\n').filter(l => l.trim());
+      const rows = [];
+      for (const line of lines) {
+        const m = line.match(/Epoch \[(\d+)\/(\d+)\] train_loss=([\d.]+) test_loss=([\d.]+) test_psnr=([\d.]+)dB/);
+        if (m) rows.push({ ep: +m[1], total: +m[2], tl: +m[3], vl: +m[4], psnr: +m[5] });
+      }
+      if (!rows.length) return;
+      lastRows = rows;
+      const cur = rows[rows.length - 1];
+      const best = rows.reduce((a, b) => a.psnr > b.psnr ? a : b);
+      document.getElementById('epoch').textContent = cur.ep + ' / ' + cur.total;
+      document.getElementById('train-loss').textContent = cur.tl.toFixed(4);
+      document.getElementById('test-loss').textContent = cur.vl.toFixed(4);
+      document.getElementById('best-psnr').textContent = best.psnr.toFixed(2) + ' dB';
+      const pct = Math.min(100, Math.round(cur.ep / cur.total * 100));
+      document.getElementById('pct').textContent = pct + '%';
+      document.getElementById('bar').style.width = pct + '%';
+      document.getElementById('last-update').textContent = '最后更新: ' + new Date().toLocaleTimeString('zh-CN');
+      if (cur.ep >= cur.total) {
+        const s = document.getElementById('status');
+        s.className = 'status done';
+        s.innerHTML = '训练完成';
+      }
+      renderChart(rows);
+      renderTable(rows);
+    } catch (e) {
+      document.getElementById('status').textContent = '连接失败，重试中...';
+    }
+  }
+
+  function renderChart(rows) {
+    const svg = document.getElementById('chart');
+    const W = 800, H = 220, padL = 50, padR = 10, padT = 10, padB = 25;
+    const psnrs = rows.map(r => r.psnr);
+    let mn = Math.min(...psnrs), mx = Math.max(...psnrs);
+    const pad = Math.max(2, (mx - mn) * 0.15);
+    mn -= pad; mx += pad;
+    const x = i => padL + (W - padL - padR) * (i / Math.max(1, rows.length - 1));
+    const y = v => padT + (H - padT - padB) * (1 - (v - mn) / (mx - mn));
+    let pts = rows.map((r, i) => `${x(i).toFixed(1)},${y(r.psnr).toFixed(1)}`).join(' ');
+    let html = '';
+    // 基线参考线 18.85
+    const by = y(18.85);
+    if (by >= padT && by <= H - padB) {
+      html += `<line x1="${padL}" y1="${by}" x2="${W-padR}" y2="${by}" stroke="#f87171" stroke-width="1.5" stroke-dasharray="6,4"/>`;
+      html += `<text x="${W-padR-4}" y="${by-4}" fill="#f87171" font-size="11" text-anchor="end">基线 18.85dB</text>`;
+    }
+    // 网格线
+    for (let g = 0; g <= 4; g++) {
+      const v = mn + (mx - mn) * g / 4;
+      const gy = y(v);
+      html += `<line x1="${padL}" y1="${gy}" x2="${W-padR}" y2="${gy}" stroke="#334155" stroke-width="1"/>`;
+      html += `<text x="${padL-6}" y="${gy+4}" fill="#94a3b8" font-size="11" text-anchor="end">${v.toFixed(1)}</text>`;
+    }
+    // 坐标轴
+    html += `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H-padB}" stroke="#475569" stroke-width="1.5"/>`;
+    html += `<line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="#475569" stroke-width="1.5"/>`;
+    if (rows.length > 1) {
+      html += `<polyline points="${pts}" fill="none" stroke="#60a5fa" stroke-width="2.5" stroke-linejoin="round"/>`;
+      html += `<circle cx="${x(rows.length-1)}" cy="${y(rows[rows.length-1].psnr)}" r="4" fill="#4ade80"/>`;
+    }
+    svg.innerHTML = html;
+  }
+
+  function renderTable(rows) {
+    const box = document.getElementById('log-table');
+    const reversed = [...rows].reverse().slice(0, 30);
+    let html = '<table><tr><th>Epoch</th><th>Train Loss</th><th>Test Loss</th><th>PSNR (dB)</th></tr>';
+    for (const r of reversed) {
+      const hl = r.psnr >= 18.85 ? ' style="color:#4ade80;"' : '';
+      html += `<tr><td>${r.ep}</td><td>${r.tl.toFixed(4)}</td><td>${r.vl.toFixed(4)}</td><td${hl}>${r.psnr.toFixed(2)}</td></tr>`;
+    }
+    box.innerHTML = html + '</table>';
+  }
+
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>

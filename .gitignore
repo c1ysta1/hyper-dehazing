@@ -1,0 +1,37 @@
+# ===== 数据（高光谱 npy，体积大，不入库）=====
+data/
+
+# ===== 训练产物 / 模型权重 / latent 缓存 =====
+checkpoints/
+latent_cache*/
+*.pth
+*.pt
+
+# ===== 日志与结果 =====
+logs/
+results/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ===== 环境 / 依赖 =====
+requirements*.txt
+
+# ===== Windows =====
+desktop.ini
+Thumbs.db
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.iml
+
+# ===== 临时 =====
+*.tmp
+*.bak
+.DS_Store

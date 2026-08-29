@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>高光谱去雾实验 · 多阶段进度总览</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 24px; }
+  .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px;
+          border: 1px solid #334155; }
+  h1 { font-size: 20px; margin-bottom: 4px; color: #f1f5f9; }
+  .sub { color: #94a3b8; font-size: 13px; }
+  .hero-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+  .status { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px;
+            font-size: 13px; font-weight: 600; }
+  .status.running { background: #16a34a22; color: #4ade80; border: 1px solid #16a34a55; }
+  .status.done { background: #3b82f622; color: #60a5fa; border: 1px solid #3b82f655; }
+  .status.idle { background: #64748b22; color: #94a3b8; border: 1px solid #64748b55; }
+  .status.paused { background: #eab30822; color: #facc15; border: 1px solid #eab30855; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .phase-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 980px) { .phase-grid { grid-template-columns: 1fr; } }
+  .phase-card { background: #1e293b; border-radius: 12px; padding: 18px; border: 1px solid #334155;
+                display: flex; flex-direction: column; gap: 12px; transition: border-color .2s; }
+  .phase-card:hover { border-color: #60a5fa; }
+  .phase-card.running { border-color: #16a34a88; }
+  .phase-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .phase-name { font-size: 15px; font-weight: 700; color: #f1f5f9; }
+  .phase-desc { font-size: 12px; color: #94a3b8; }
+  .metrics { display: flex; gap: 10px; flex-wrap: wrap; }
+  .m { flex: 1; min-width: 96px; background: #0f172a; border-radius: 8px; padding: 10px 12px;
+       border: 1px solid #334155; }
+  .m .label { font-size: 11px; color: #94a3b8; }
+  .m .value { font-size: 19px; font-weight: 700; margin-top: 2px; color: #e2e8f0; }
+  .m .value.green { color: #4ade80; } .m .value.blue { color: #60a5fa; }
+  .m .value.amber { color: #fbbf24; } .m .value.pink { color: #f472b6; }
+  .bar-wrap { background: #0f172a; border-radius: 8px; height: 14px; overflow: hidden;
+              border: 1px solid #334155; }
+  .bar { height: 100%; background: linear-gradient(90deg, #10b981, #3b82f6, #8b5cf6); width: 0%;
+         transition: width 0.5s; }
+  .pct-row { display: flex; justify-content: space-between; font-size: 12px; color: #94a3b8; }
+  .spark { width: 100%; height: 56px; }
+  a.enter { color: #60a5fa; font-size: 13px; text-decoration: none; font-weight: 600; }
+  a.enter:hover { text-decoration: underline; }
+  .log-box { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: 12px;
+             background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px;
+             max-height: 260px; overflow-y: auto; white-space: pre-wrap; color: #cbd5e1; }
+  .cmp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 980px) { .cmp-grid { grid-template-columns: 1fr; } }
+  .cmp-title { font-size: 13px; color: #94a3b8; margin-bottom: 6px; }
+  svg text { font-family: inherit; }
+  .nav-links { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+  .nav-links a { color: #60a5fa; font-size: 13px; text-decoration: none; padding: 4px 10px;
+                 border: 1px solid #334155; border-radius: 999px; }
+  .nav-links a:hover { border-color: #60a5fa; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="hero-head">
+      <div>
+        <h1>高光谱去雾实验 · 多阶段训练总览</h1>
+        <div class="sub">RSyntHyperPDID (182 波段, 256×256) · RTX 5090 · 页面每 4 秒自动刷新</div>
+      </div>
+      <div style="text-align:right;">
+        <span class="status idle" id="global-status">加载中…</span>
+        <div class="sub" id="last-update" style="margin-top:6px;">最后更新: --</div>
+      </div>
+    </div>
+    <div class="nav-links">
+      <a href="/webui/phase2_progress.html">阶段2 详情</a>
+      <a href="/webui/phase3_progress.html">阶段3 详情</a>
+      <a href="/webui/phase4_progress.html">阶段4 详情</a>
+      <a href="/webui/phase5_progress.html">阶段5 详情</a>
+    </div>
+  </div>
+
+  <div class="phase-grid" id="phase-grid"></div>
+
+  <div class="card">
+    <h1 style="font-size:16px; margin-bottom:12px;">测试指标对比（最终测试集结果）</h1>
+    <div class="cmp-grid">
+      <div><div class="cmp-title">PSNR (dB, 越高越好)</div><svg id="cmp-psnr" viewBox="0 0 320 190" preserveAspectRatio="none"></svg></div>
+      <div><div class="cmp-title">SSIM (越高越好)</div><svg id="cmp-ssim" viewBox="0 0 320 190" preserveAspectRatio="none"></svg></div>
+      <div><div class="cmp-title">SAM (°, 越低越好)</div><svg id="cmp-sam" viewBox="0 0 320 190" preserveAspectRatio="none"></svg></div>
+    </div>
+    <div class="sub" style="margin-top:8px;">注: 阶段2 为全监督 PSGNet 基线（评测口径为 best ckpt + 全测试集，与扩散模型一致）；阶段3/4/5 指标取自日志 Final test metrics；阶段5 启动并产出最终指标后自动加入对比。</div>
+  </div>
+
+  <div class="card">
+    <h1 style="font-size:16px; margin-bottom:4px;">实时日志 <span class="sub" id="live-log-src"></span></h1>
+    <div class="log-box" id="live-log">等待数据……</div>
+  </div>
+
+<script>
+  const PHASES = [
+    { key: 'phase2', name: '阶段2 · PSGNet 基线（全监督）', page: '/webui/phase2_progress.html',
+      hist: '/checkpoints/history_psgnet_phase2.json',
+      desc: '复现物理引导监督网络 PSGNet，作为去雾性能上界参考' },
+    { key: 'phase3', name: '阶段3 · 条件潜在扩散 LDM', page: '/webui/phase3_progress.html',
+      hist: '/checkpoints/history_conditional_ldm_phase3_full.json',
+      desc: '自编码器压缩 + 条件 DDPM，扩散去雾基线' },
+    { key: 'phase4', name: '阶段4 · 物理引导 LDM', page: '/webui/phase4_progress.html',
+      hist: '/checkpoints/history_physics_ldm_phase4.json',
+      desc: 'ASM 大气散射物理一致性损失引导扩散训练' },
+    { key: 'phase5', name: '阶段5 · 无配对训练', page: '/webui/phase5_progress.html',
+      hist: null,
+      desc: '无配对（unpaired）训练策略，等待启动' },
+  ];
+  const PALETTE = ['#4ade80', '#60a5fa', '#fbbf24', '#f472b6', '#a78bfa', '#fb923c'];
+  const state = { status: null, hist: {}, logs: {} };
+
+  async function fetchText(url) {
+    try { const r = await fetch(url + '?t=' + Date.now()); if (!r.ok) return null; return await r.text(); }
+    catch (e) { return null; }
+  }
+  async function fetchJson(url) {
+    try { const r = await fetch(url + '?t=' + Date.now()); if (!r.ok) return null; return await r.json(); }
+    catch (e) { return null; }
+  }
+
+  function parseFinal(text) {
+    if (!text) return null;
+    const m = text.match(/Final test metrics: PSNR=([\d.]+)\s*dB\s*SSIM=([\d.]+)\s*SAM=([\d.]+)/);
+    if (m) return { psnr: +m[1], ssim: +m[2], sam: +m[3] };
+    return null;
+  }
+
+  function statusBadge(st) {
+    if (st.running) return `<span class="status running"><span class="dot"></span>训练中</span>`;
+    if (!st.found) return `<span class="status idle">未开始</span>`;
+    if (st.done) return `<span class="status done">已完成</span>`;
+    return `<span class="status paused">已暂停</span>`;
+  }
+
+  function sparkline(histRows) {
+    if (!histRows || histRows.length < 2) return '';
+    const W = 340, H = 56, pad = 4;
+    const mn = Math.min(...histRows), mx = Math.max(...histRows);
+    const rng = (mx - mn) || 1;
+    const x = i => pad + (W - 2 * pad) * i / (histRows.length - 1);
+    const y = v => pad + (H - 2 * pad) * (1 - (v - mn) / rng);
+    const pts = histRows.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    const lastX = x(histRows.length - 1), lastY = y(histRows[histRows.length - 1]);
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <polyline points="${pts}" fill="none" stroke="#60a5fa" stroke-width="1.8" stroke-linejoin="round"/>
+      <circle cx="${lastX}" cy="${lastY}" r="3" fill="#60a5fa"/></svg>`;
+  }
+
+  function metricHtml(label, value, cls) {
+    return `<div class="m"><div class="label">${label}</div><div class="value ${cls || ''}">${value}</div></div>`;
+  }
+
+  function renderPhase(p) {
+    const st = state.status.phases[p.key] || {};
+    const hist = state.hist[p.key];
+    const logText = state.logs[p.key];
+    const fin = parseFinal(logText);
+    let metrics = '', spark = '';
+    if (p.key === 'phase2' && hist && hist.test_psnr) {
+      const best = Math.max(...hist.test_psnr);
+      const fm = hist.final_metrics || {};
+      metrics = metricHtml('Best Test PSNR', best.toFixed(2) + ' dB', 'green') +
+                metricHtml('Final SSIM', fm.ssim != null ? fm.ssim.toFixed(4) : '--', 'blue') +
+                metricHtml('Final SAM', fm.sam != null ? fm.sam.toFixed(2) + '°' : '--', 'amber') +
+                metricHtml('Epochs', hist.train_loss.length, 'blue');
+      spark = sparkline(hist.test_psnr);
+    } else if (hist && hist.val_psnr) {
+      const best = Math.max(...hist.val_psnr);
+      const cur = hist.val_psnr[hist.val_psnr.length - 1];
+      metrics = metricHtml('Best Val PSNR', best.toFixed(2) + ' dB', 'green') +
+                metricHtml('最新 Val PSNR', cur != null ? cur.toFixed(2) + ' dB' : '--', 'blue');
+      if (fin) metrics += metricHtml('Final Test PSNR', fin.psnr.toFixed(2) + ' dB', 'green');
+      if (p.key === 'phase4') {
+        metrics += metricHtml('Phys Loss', hist.phys_loss ? hist.phys_loss[hist.phys_loss.length - 1].toFixed(4) : '--', 'amber');
+      }
+      spark = sparkline(hist.val_psnr);
+    } else if (fin) {
+      metrics = metricHtml('Final Test PSNR', fin.psnr.toFixed(2) + ' dB', 'green') +
+                metricHtml('Final SSIM', fin.ssim.toFixed(4), 'blue') +
+                metricHtml('Final SAM', fin.sam.toFixed(2) + '°', 'amber');
+    } else if (st.found) {
+      metrics = metricHtml('Epoch', st.epoch + ' / ' + st.total, 'blue');
+    } else {
+      metrics = metricHtml('状态', '等待启动', '');
+    }
+    if (!metrics) metrics = metricHtml('状态', '等待启动', '');
+    const pct = st.total ? Math.min(100, Math.round(st.epoch / st.total * 100)) : (st.done ? 100 : 0);
+    return `<div class="phase-card ${st.running ? 'running' : ''}">
+      <div class="phase-head"><div class="phase-name">${p.name}</div>${statusBadge(st)}</div>
+      <div class="phase-desc">${p.desc}${st.script ? ' · <span style="color:#4ade80">' + st.script + '</span>' : ''}</div>
+      <div class="metrics">${metrics}</div>
+      ${spark}
+      <div><div class="pct-row"><span>进度 ${st.found ? 'Epoch ' + st.epoch + '/' + st.total : '--'}</span><span>${pct}%</span></div>
+      <div class="bar-wrap"><div class="bar" style="width:${pct}%"></div></div></div>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <a class="enter" href="${p.page}">查看详情 →</a>
+        <span class="sub">${st.log ? st.log.replace('/logs/', '') : ''}${st.mtime_age != null && !st.running ? ' · ' + fmtAge(st.mtime_age) + '前更新' : ''}</span>
+      </div>
+    </div>`;
+  }
+
+  function fmtAge(sec) {
+    if (sec < 90) return Math.round(sec) + ' 秒';
+    if (sec < 5400) return Math.round(sec / 60) + ' 分钟';
+    if (sec < 129600) return Math.round(sec / 3600) + ' 小时';
+    return Math.round(sec / 86400) + ' 天';
+  }
+
+  function barChart(elId, entries, unit, higherBetter) {
+    const svg = document.getElementById(elId);
+    if (!entries.length) { svg.innerHTML = `<text x="160" y="95" fill="#64748b" font-size="12" text-anchor="middle">暂无数据</text>`; return; }
+    const W = 320, H = 190, padL = 8, padB = 40, padT = 16;
+    const vals = entries.map(e => e.v);
+    let mx = Math.max(...vals), mn = Math.min(...vals, 0);
+    const pad = (mx - mn) * 0.15 || 1; mx += pad; if (!higherBetter) mn = Math.min(mn, 0);
+    const bw = Math.min(56, (W - padL * 2) / entries.length - 14);
+    const gap = (W - padL * 2 - bw * entries.length) / (entries.length + 1);
+    let html = '';
+    entries.forEach((e, i) => {
+      const x = padL + gap + i * (bw + gap);
+      const h = (H - padT - padB) * (e.v - mn) / (mx - mn || 1);
+      const y = H - padB - h;
+      html += `<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(2, h)}" rx="4" fill="${e.color}"/>`;
+      html += `<text x="${x + bw / 2}" y="${y - 5}" fill="#e2e8f0" font-size="12" font-weight="700" text-anchor="middle">${e.v.toFixed(2)}${unit}</text>`;
+      html += `<text x="${x + bw / 2}" y="${H - padB + 16}" fill="#94a3b8" font-size="11" text-anchor="middle">${e.name}</text>`;
+    });
+    svg.innerHTML = html;
+  }
+
+  function renderCompare() {
+    const items = [];
+    for (const p of PHASES) {
+      const fin = parseFinal(state.logs[p.key]);
+      if (fin) items.push({ name: p.name.split(' · ')[0], fin });
+    }
+    const h2 = state.hist.phase2;
+    const psnrEntries = [];
+    if (h2 && h2.test_psnr) psnrEntries.push({ name: '阶段2', v: Math.max(...h2.test_psnr), color: '#94a3b8' });
+    items.forEach(it => psnrEntries.push({ name: it.name, v: it.fin.psnr, color: it.name === '阶段4' ? '#4ade80' : (it.name === '阶段5' ? '#a78bfa' : '#60a5fa') }));
+    barChart('cmp-psnr', psnrEntries, '', true);
+    // SSIM/SAM 对比：阶段2 用 final_metrics（PSGNet 评测口径），其余用日志 Final 行
+    const ssimEntries = [], samEntries = [];
+    if (h2 && h2.final_metrics) {
+      ssimEntries.push({ name: '阶段2', v: h2.final_metrics.ssim, color: '#94a3b8' });
+      samEntries.push({ name: '阶段2', v: h2.final_metrics.sam, color: '#94a3b8' });
+    }
+    items.forEach(it => {
+      const c = it.name === '阶段4' ? '#4ade80' : (it.name === '阶段5' ? '#a78bfa' : '#60a5fa');
+      ssimEntries.push({ name: it.name, v: it.fin.ssim, color: c });
+      samEntries.push({ name: it.name, v: it.fin.sam, color: c });
+    });
+    barChart('cmp-ssim', ssimEntries, '', true);
+    barChart('cmp-sam', samEntries, '°', false);
+  }
+
+  function renderLiveLog() {
+    const box = document.getElementById('live-log');
+    const src = document.getElementById('live-log-src');
+    let target = null;
+    for (const p of PHASES) {
+      const st = state.status.phases[p.key];
+      if (st && st.running) { target = p.key; break; }
+    }
+    if (!target) {
+      let newest = null, newestAge = Infinity;
+      for (const p of PHASES) {
+        const st = state.status.phases[p.key];
+        if (st && st.found && st.mtime_age != null && st.mtime_age < newestAge) { newest = p.key; newestAge = st.mtime_age; }
+      }
+      target = newest;
+    }
+    if (!target) { box.textContent = '暂无任何训练日志。'; src.textContent = ''; return; }
+    const p = PHASES.find(x => x.key === target);
+    const st = state.status.phases[target];
+    const text = state.logs[target];
+    src.textContent = '· ' + p.name + (st.running ? '（训练中）' : '') + ' · ' + st.log;
+    if (!text) { box.textContent = '日志尚未生成……'; return; }
+    const lines = text.split('\n').filter(l => l.trim());
+    box.textContent = lines.slice(-30).join('\n');
+    box.scrollTop = box.scrollHeight;
+  }
+
+  async function refresh() {
+    try {
+      const status = await fetchJson('/api/status');
+      if (!status || !status.phases) throw new Error('api');
+      state.status = status;
+      await Promise.all(PHASES.map(async p => {
+        state.logs[p.key] = await fetchText(status.phases[p.key].log || (p.key + '.__none__'));
+        if (p.hist) state.hist[p.key] = await fetchJson(p.hist);
+      }));
+      document.getElementById('phase-grid').innerHTML = PHASES.map(renderPhase).join('');
+      renderCompare();
+      renderLiveLog();
+      const running = PHASES.filter(p => state.status.phases[p.key].running);
+      const gs = document.getElementById('global-status');
+      if (running.length) {
+        gs.className = 'status running';
+        gs.innerHTML = `<span class="dot"></span>${running.length} 个阶段训练中`;
+      } else {
+        gs.className = 'status idle';
+        gs.textContent = '当前无训练进行';
+      }
+      document.getElementById('last-update').textContent = '最后更新: ' + new Date().toLocaleTimeString('zh-CN');
+    } catch (e) {
+      document.getElementById('global-status').textContent = '连接失败，重试中…';
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 4000);
+</script>
+</body>
+</html>

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>阶段5 无配对训练 实时进度</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 24px; }
+  .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px;
+          border: 1px solid #334155; }
+  h1 { font-size: 20px; margin-bottom: 4px; color: #f1f5f9; }
+  .sub { color: #94a3b8; font-size: 13px; margin-bottom: 16px; }
+  .stat-grid { display: flex; gap: 16px; flex-wrap: wrap; }
+  .stat { flex: 1; min-width: 130px; background: #0f172a; border-radius: 10px; padding: 14px 16px;
+          border: 1px solid #334155; }
+  .stat .label { font-size: 12px; color: #94a3b8; }
+  .stat .value { font-size: 25px; font-weight: 700; margin-top: 4px; }
+  .stat .value.green { color: #4ade80; }
+  .stat .value.blue { color: #60a5fa; }
+  .stat .value.amber { color: #fbbf24; }
+  .stat .value.pink { color: #f472b6; }
+  .bar-wrap { margin-top: 12px; background: #0f172a; border-radius: 8px; height: 18px; overflow: hidden;
+              border: 1px solid #334155; }
+  .bar { height: 100%; background: linear-gradient(90deg, #10b981, #3b82f6, #8b5cf6); width: 0%;
+         transition: width 0.5s; }
+  .pct-row { display:flex; justify-content:space-between; font-size:12px; color:#94a3b8; margin-bottom:4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-weight: 500; }
+  td:first-child, th:first-child { text-align: left; }
+  tr:hover td { background: #1e293b; }
+  .log-box { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: 12px;
+             background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px;
+             max-height: 260px; overflow-y: auto; white-space: pre-wrap; }
+  .status { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px;
+            font-size: 13px; font-weight: 600; }
+  .status.running { background: #16a34a22; color: #4ade80; border: 1px solid #16a34a55; }
+  .status.done { background: #3b82f622; color: #60a5fa; border: 1px solid #3b82f655; }
+  .status.idle { background: #64748b22; color: #94a3b8; border: 1px solid #64748b55; }
+  .status.paused { background: #eab30822; color: #facc15; border: 1px solid #eab30855; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  svg { width: 100%; height: 240px; }
+  #chart-title { font-size: 14px; color: #94a3b8; margin-bottom: 8px; }
+  .back-link { color: #60a5fa; font-size: 13px; text-decoration: none; }
+  .back-link:hover { text-decoration: underline; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: #94a3b8; margin-top: 6px; }
+  .legend span::before { content: '■ '; }
+  .placeholder { text-align: center; padding: 46px 20px; color: #94a3b8; }
+  .placeholder .big { font-size: 40px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <a class="back-link" href="/"><- 返回多阶段总览</a>
+    <h1 style="margin-top:8px;">阶段5 · 无配对（Unpaired）训练</h1>
+    <div class="sub">策略: 无配对去雾（hazy / clear 不要求成对） · 页面自动检测训练启动，无需手动刷新</div>
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+      <span class="status idle" id="status">检测中…</span>
+      <span class="sub" id="last-update" style="margin:0;">最后更新: --</span>
+      <span class="sub" id="log-src" style="margin:0;"></span>
+    </div>
+    <div id="metrics-area">
+      <div class="stat-grid" id="stat-grid"></div>
+      <div style="margin-top:14px;" id="progress-area">
+        <div class="pct-row"><span>训练进度</span><span id="pct">0%</span></div>
+        <div class="bar-wrap"><div class="bar" id="bar"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="chart-card">
+    <div id="chart-title">训练曲线（自动识别日志中的数值列）</div>
+    <svg id="chart" viewBox="0 0 800 240" preserveAspectRatio="none"></svg>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="card" id="table-card">
+    <h1 style="font-size:16px;">Epoch 明细（最新 30 条）</h1>
+    <div style="max-height:320px; overflow-y:auto;"><table id="table"></table></div>
+  </div>
+
+  <div class="card" id="log-card">
+    <h1 style="font-size:16px;">原始日志（尾部）</h1>
+    <div class="log-box" id="raw-log"></div>
+  </div>
+
+<script>
+  const PALETTE = ['#4ade80', '#60a5fa', '#fbbf24', '#f472b6', '#a78bfa', '#fb923c'];
+  let logUrl = null;
+
+  // 通用解析: Epoch [n/N] k1=v1 k2=v2 ...（兼容任意字段名）
+  function parseEpoch(line) {
+    const m = line.match(/Epoch \[(\d+)\/(\d+)\]/);
+    if (!m) return null;
+    const r = { ep: +m[1], total: +m[2] };
+    for (const kv of line.matchAll(/([a-z_]+)=(-?[\d.]+)/g)) {
+      if (kv[1] === 'time' || kv[1] === 'elapsed') continue;
+      r[kv[1]] = +kv[2];
+    }
+    return r;
+  }
+
+  function fmt(key) {
+    const map = { train_loss: 'Train Loss', total_loss: 'Total Loss', diff_loss: 'Diff Loss', diff: 'Diff Loss',
+                  asm_loss: 'ASM(物理循环) Loss', asm: 'ASM(物理循环) Loss', phys_loss: 'Phys Loss',
+                  cycle_loss: 'Cycle Loss', adv_loss: 'Adv Loss',
+                  id_loss: 'Id Loss', test_psnr: 'Test PSNR', val_psnr: 'Val PSNR',
+                  test_ssim: 'Test SSIM', val_ssim: 'Val SSIM', test_sam: 'Test SAM', val_sam: 'Val SAM',
+                  train_psnr: 'Train PSNR', test_loss: 'Test Loss', d_loss: 'D Loss', g_loss: 'G Loss' };
+    return map[key] || key;
+  }
+
+  async function detectLog() {
+    try {
+      const r = await fetch('/api/status?t=' + Date.now());
+      const j = await r.json();
+      const st = j.phases && j.phases.phase5;
+      if (st && st.log) return st;
+      return st || null;
+    } catch (e) { return null; }
+  }
+
+  function showPlaceholder(st) {
+    const s = document.getElementById('status');
+    if (st && st.running) {
+      s.className = 'status running';
+      s.innerHTML = '<span class="dot"></span>训练启动中（日志尚未生成）';
+    } else {
+      s.className = 'status idle';
+      s.textContent = '未开始';
+    }
+    document.getElementById('metrics-area').style.display = 'none';
+    for (const id of ['chart-card', 'table-card', 'log-card']) {
+      document.getElementById(id).style.display = 'none';
+    }
+    const chart = document.getElementById('chart-card');
+    chart.style.display = 'block';
+    document.getElementById('chart-title').textContent = '阶段5 等待启动';
+    chart.querySelector('svg').innerHTML = `<text x="400" y="120" fill="#64748b" font-size="14" text-anchor="middle">尚未检测到阶段5训练日志，启动训练后本页自动切换为实时进度。</text>`;
+    document.getElementById('last-update').textContent = '最后检测: ' + new Date().toLocaleTimeString('zh-CN');
+  }
+
+  async function refresh() {
+    if (!logUrl) {
+      const st = await detectLog();
+      if (!st || !st.log) { showPlaceholder(st); return; }
+      logUrl = st.log;
+      for (const id of ['chart-card', 'table-card', 'log-card']) {
+        document.getElementById(id).style.display = 'block';
+      }
+      document.getElementById('metrics-area').style.display = 'block';
+      document.getElementById('log-src').textContent = '· 日志: ' + logUrl;
+    }
+    try {
+      const res = await fetch(logUrl + '?t=' + Date.now());
+      const text = await res.text();
+      const rows = [];
+      for (const line of text.split('\n')) {
+        const r = parseEpoch(line);
+        if (r) rows.push(r);
+      }
+      if (!rows.length) { showPlaceholder({ running: true }); return; }
+      const cur = rows[rows.length - 1];
+      // 数值列(除 ep/total 外)
+      const keys = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(k => k !== 'ep' && k !== 'total');
+      const psnrKey = keys.find(k => /psnr/.test(k));
+      // 指标卡
+      const statGrid = document.getElementById('stat-grid');
+      let cards = `<div class="stat"><div class="label">Epoch</div><div class="value blue">${cur.ep} / ${cur.total}</div></div>`;
+      for (const k of keys.slice(0, 4)) {
+        const v = cur[k];
+        if (v == null) continue;
+        const cls = /psnr|ssim/.test(k) ? (/psnr/.test(k) ? 'green' : 'blue') : (/sam/.test(k) ? 'amber' : '');
+        const unit = /psnr/.test(k) ? ' dB' : (/sam/.test(k) ? '°' : '');
+        const dec = /psnr|ssim|sam/.test(k) ? 2 : 4;
+        cards += `<div class="stat"><div class="label">${fmt(k)}</div><div class="value ${cls}">${v.toFixed(dec)}${unit}</div></div>`;
+      }
+      if (psnrKey) {
+        const best = Math.max(...rows.map(r => r[psnrKey]).filter(v => v != null));
+        cards += `<div class="stat"><div class="label">${fmt(psnrKey)} (最优)</div><div class="value green">${best.toFixed(2)} dB</div></div>`;
+      }
+      statGrid.innerHTML = cards;
+      const pct = Math.min(100, Math.round(cur.ep / cur.total * 100));
+      document.getElementById('pct').textContent = pct + '%';
+      document.getElementById('bar').style.width = pct + '%';
+      document.getElementById('last-update').textContent = '最后更新: ' + new Date().toLocaleTimeString('zh-CN');
+      const s = document.getElementById('status');
+      if (cur.ep >= cur.total) { s.className = 'status done'; s.innerHTML = '训练完成'; }
+      else { s.className = 'status running'; s.innerHTML = '<span class="dot"></span>训练中'; }
+      renderChart(rows, keys);
+      renderTable(rows, keys);
+      const lines = text.split('\n').filter(l => l.trim());
+      document.getElementById('raw-log').textContent = lines.slice(-25).join('\n');
+    } catch (e) {
+      document.getElementById('status').textContent = '连接失败，重试中...';
+    }
+  }
+
+  function renderChart(rows, keys) {
+    const svg = document.getElementById('chart');
+    const W = 800, H = 240, padL = 50, padR = 14, padT = 14, padB = 25;
+    const plotKeys = keys.filter(k => !/psnr|ssim|sam/.test(k)).slice(0, 4);
+    const all = plotKeys.flatMap(k => rows.map(r => r[k]).filter(v => v != null));
+    if (!all.length) { svg.innerHTML = ''; return; }
+    let mn = Math.min(...all), mx = Math.max(...all);
+    const pad = Math.max(1e-4, (mx - mn) * 0.1);
+    mn -= pad; mx += pad;
+    const x = i => padL + (W - padL - padR) * (i / Math.max(1, rows.length - 1));
+    const y = v => padT + (H - padT - padB) * (1 - (v - mn) / (mx - mn));
+    let html = '';
+    for (let g = 0; g <= 4; g++) {
+      const v = mn + (mx - mn) * g / 4;
+      html += `<line x1="${padL}" y1="${y(v)}" x2="${W-padR}" y2="${y(v)}" stroke="#334155" stroke-width="1"/>`;
+      html += `<text x="${padL-6}" y="${y(v)+4}" fill="#94a3b8" font-size="11" text-anchor="end">${v.toFixed(3)}</text>`;
+    }
+    html += `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H-padB}" stroke="#475569" stroke-width="1.5"/>`;
+    html += `<line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="#475569" stroke-width="1.5"/>`;
+    let legend = '';
+    plotKeys.forEach((k, ki) => {
+      const c = PALETTE[ki % PALETTE.length];
+      const pts = rows.map((r, i) => r[k] != null ? `${x(i).toFixed(1)},${y(r[k]).toFixed(1)}` : null).filter(Boolean).join(' ');
+      if (pts) html += `<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="2" stroke-linejoin="round"/>`;
+      legend += `<span style="color:${c}">${fmt(k)}</span>`;
+    });
+    // 指标类(psnr/ssim/sam)右轴虚线
+    const metricKeys = keys.filter(k => /psnr|ssim|sam/.test(k)).slice(0, 2);
+    metricKeys.forEach((k, ki) => {
+      const vals = rows.map(r => r[k]).filter(v => v != null);
+      if (vals.length < 2) return;
+      let pmn = Math.min(...vals), pmx = Math.max(...vals);
+      const ppad = Math.max(0.1, (pmx - pmn) * 0.25);
+      pmn -= ppad; pmx += ppad;
+      const py = v => padT + (H - padT - padB) * (1 - (v - pmn) / (pmx - pmn));
+      const pts = rows.map((r, i) => r[k] != null ? `${x(i).toFixed(1)},${py(r[k]).toFixed(1)}` : null).filter(Boolean).join(' ');
+      const c = ki === 0 ? '#f472b6' : '#38bdf8';
+      html += `<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="2.2" stroke-dasharray="6,4" stroke-linejoin="round"/>`;
+      legend += `<span style="color:${c}">${fmt(k)} (右轴)</span>`;
+    });
+    svg.innerHTML = html;
+    document.getElementById('legend').innerHTML = legend;
+  }
+
+  function renderTable(rows, keys) {
+    const reversed = [...rows].reverse().slice(0, 30);
+    const cols = keys.filter(k => rows.some(r => r[k] != null));
+    let html = '<table><tr><th>Epoch</th>' + cols.map(k => `<th>${fmt(k)}</th>`).join('') + '</tr>';
+    for (const r of reversed) {
+      html += `<tr><td>${r.ep}</td>` + cols.map(k => {
+        const v = r[k];
+        const hl = /psnr/.test(k) ? ' style="color:#4ade80;"' : '';
+        return `<td${hl}>${v != null ? (/psnr|sam/.test(k) ? v.toFixed(2) : v.toFixed(4)) : '--'}</td>`;
+      }).join('') + '</tr>';
+    }
+    document.getElementById('table').innerHTML = html + '</table>';
+  }
+
+  refresh();
+  setInterval(refresh, 4000);
+</script>
+</body>
+</html>

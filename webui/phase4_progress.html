@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>阶段4 物理引导LDM 实时进度</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 24px; }
+  .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px;
+          border: 1px solid #334155; }
+  h1 { font-size: 20px; margin-bottom: 4px; color: #f1f5f9; }
+  .sub { color: #94a3b8; font-size: 13px; margin-bottom: 16px; }
+  .stat-grid { display: flex; gap: 16px; flex-wrap: wrap; }
+  .stat { flex: 1; min-width: 130px; background: #0f172a; border-radius: 10px; padding: 14px 16px;
+          border: 1px solid #334155; }
+  .stat .label { font-size: 12px; color: #94a3b8; }
+  .stat .value { font-size: 25px; font-weight: 700; margin-top: 4px; }
+  .stat .value.green { color: #4ade80; }
+  .stat .value.blue { color: #60a5fa; }
+  .stat .value.amber { color: #fbbf24; }
+  .stat .value.orange { color: #fb923c; }
+  .bar-wrap { margin-top: 12px; background: #0f172a; border-radius: 8px; height: 18px; overflow: hidden;
+              border: 1px solid #334155; }
+  .bar { height: 100%; background: linear-gradient(90deg, #10b981, #3b82f6, #8b5cf6); width: 0%;
+         transition: width 0.5s; }
+  .pct-row { display:flex; justify-content:space-between; font-size:12px; color:#94a3b8; margin-bottom:4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-weight: 500; }
+  td:first-child, th:first-child { text-align: left; }
+  tr:hover td { background: #1e293b; }
+  .log-box { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: 12px;
+             background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px;
+             max-height: 220px; overflow-y: auto; white-space: pre-wrap; }
+  .status { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px;
+            font-size: 13px; font-weight: 600; }
+  .status.running { background: #16a34a22; color: #4ade80; border: 1px solid #16a34a55; }
+  .status.done { background: #3b82f622; color: #60a5fa; border: 1px solid #3b82f655; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  svg { width: 100%; height: 240px; }
+  #chart-title { font-size: 14px; color: #94a3b8; margin-bottom: 8px; }
+  .sample-img { width: 100%; border-radius: 8px; border: 1px solid #334155; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <div class="card">
+    <a href="/" style="color:#60a5fa; font-size:13px; text-decoration:none;">&lt;- 返回多阶段总览</a>
+    <h1 style="margin-top:8px;">阶段4 · 物理引导潜在扩散（LDM）去雾训练</h1>
+    <div class="sub">数据集: RSyntHyperPDID (182 波段, 256×256) · 训练: data/train (2352 对) · 测试: data/test · GPU: RTX 5090 · 损失 = 扩散损失 + λ·物理一致性损失</div>
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+      <span class="status running" id="status"><span class="dot"></span>训练中</span>
+      <span class="sub" id="last-update" style="margin:0;">最后更新: --</span>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Epoch</div><div class="value blue" id="epoch">-- / --</div></div>
+      <div class="stat"><div class="label">Total Loss</div><div class="value" id="train-loss">--</div></div>
+      <div class="stat"><div class="label">Diff Loss</div><div class="value" id="diff-loss">--</div></div>
+      <div class="stat"><div class="label">Phys Loss</div><div class="value orange" id="phys-loss">--</div></div>
+      <div class="stat"><div class="label">Test PSNR (最新)</div><div class="value" id="test-psnr">--</div></div>
+      <div class="stat"><div class="label">Test PSNR (最优)</div><div class="value green" id="best-psnr">--</div></div>
+      <div class="stat"><div class="label">SAM (最新)</div><div class="value amber" id="test-sam">--</div></div>
+    </div>
+    <div style="margin-top:14px;">
+      <div class="pct-row"><span>训练进度</span><span id="pct">0%</span></div>
+      <div class="bar-wrap"><div class="bar" id="bar"></div></div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <div id="chart-title">训练损失（扩散/物理/总） + 验证 PSNR 曲线</div>
+      <svg id="chart" viewBox="0 0 800 240" preserveAspectRatio="none">
+        <text x="30" y="50" fill="#94a3b8" font-size="13">等待日志……</text>
+      </svg>
+    </div>
+    <div class="card">
+      <div id="chart-title">最新采样可视化（雾霾输入 | 物理引导去雾 | 清晰GT）</div>
+      <img class="sample-img" id="sample-img" src="/logs/physics_ldm_phase4_run1/sample_latest.png"
+           alt="采样可视化" onerror="this.style.opacity=0.3;">
+    </div>
+  </div>
+
+  <div class="card">
+    <h1 style="font-size:16px;">Epoch 明细 &gt; 实时日志</h1>
+    <div class="log-box" id="log-table"></div>
+  </div>
+
+<script>
+  // 动态定位当前阶段4训练日志：从 /api/status 取最新 log 路径，避免硬编码 run 名
+  let LOG_URL = '/logs/physics_ldm_phase4_run1/train_log.txt';
+  let SAMPLE_URL = '/logs/physics_ldm_phase4_run1/sample_latest.png';
+  let lastRows = [];
+
+  async function locateLog() {
+    try {
+      const st = await (await fetch('/api/status?t=' + Date.now())).json();
+      const p4 = st.phases && st.phases.phase4;
+      if (p4 && p4.log && p4.log.indexOf('train_log.txt') >= 0) {
+        LOG_URL = p4.log.replace(/\\/g, '/');
+        SAMPLE_URL = LOG_URL.replace(/[\/]train_log\.txt$/, '/sample_latest.png');
+      }
+    } catch (e) { /* 保持默认 */ }
+  }
+
+  function parseEpoch(line) {
+    const m = line.match(/Epoch \[(\d+)\/(\d+)\]/);
+    if (!m) return null;
+    const r = { ep: +m[1], total: +m[2] };
+    const tl = line.match(/train_loss=([\d.]+)/);
+    const df = line.match(/diff=([\d.]+)/);
+    const pv = line.match(/phys=([\d.]+)/);
+    const test = line.match(/test_psnr=([\d.]+) test_ssim=([\d.]+) test_sam=([\d.]+)/);
+    r.tl = tl ? +tl[1] : null;
+    r.diff = df ? +df[1] : null;
+    r.phys = pv ? +pv[1] : null;
+    r.psnr = test ? +test[1] : null;
+    r.ssim = test ? +test[2] : null;
+    r.sam = test ? +test[3] : null;
+    return r;
+  }
+
+  async function refresh() {
+    try {
+      await locateLog();
+      const res = await fetch(LOG_URL + '?t=' + Date.now());
+      const text = await res.text();
+      const rows = [];
+      for (const line of text.split('\n')) {
+        const r = parseEpoch(line);
+        if (r) rows.push(r);
+      }
+      if (!rows.length) return;
+      lastRows = rows;
+      const cur = rows[rows.length - 1];
+      const withPsnr = rows.filter(r => r.psnr !== null);
+      const best = withPsnr.length ? withPsnr.reduce((a, b) => a.psnr > b.psnr ? a : b) : null;
+      document.getElementById('epoch').textContent = cur.ep + ' / ' + cur.total;
+      document.getElementById('train-loss').textContent = cur.tl != null ? cur.tl.toFixed(4) : '--';
+      document.getElementById('diff-loss').textContent = cur.diff != null ? cur.diff.toFixed(4) : '--';
+      document.getElementById('phys-loss').textContent = cur.phys != null ? cur.phys.toFixed(4) : '--';
+      const psnrEl = document.getElementById('test-psnr');
+      psnrEl.textContent = cur.psnr !== null ? cur.psnr.toFixed(2) + ' dB' : '--';
+      document.getElementById('best-psnr').textContent = best ? best.psnr.toFixed(2) + ' dB' : '--';
+      document.getElementById('test-sam').textContent = cur.sam !== null ? cur.sam.toFixed(2) + '°' : '--';
+      const pct = Math.min(100, Math.round(cur.ep / cur.total * 100));
+      document.getElementById('pct').textContent = pct + '%';
+      document.getElementById('bar').style.width = pct + '%';
+      document.getElementById('last-update').textContent = '最后更新: ' + new Date().toLocaleTimeString('zh-CN');
+      if (cur.ep >= cur.total) {
+        const s = document.getElementById('status');
+        s.className = 'status done';
+        s.innerHTML = '训练完成';
+      }
+      const img = document.getElementById('sample-img');
+      img.src = SAMPLE_URL + '?t=' + Date.now();
+      img.onerror = null;
+      renderChart(rows);
+      renderTable(rows);
+      renderLog(text, cur.ep);
+    } catch (e) {
+      document.getElementById('status').textContent = '连接失败，重试中...';
+    }
+  }
+
+  function renderChart(rows) {
+    const svg = document.getElementById('chart');
+    const W = 800, H = 240, padL = 50, padR = 14, padT = 14, padB = 25;
+    const lossVals = rows.map(r => r.tl != null ? r.tl : 0);
+    let mn = Math.min(...lossVals), mx = Math.max(...lossVals);
+    const pad = Math.max(0.0005, (mx - mn) * 0.1);
+    mn -= pad; mx += pad;
+    const x = i => padL + (W - padL - padR) * (i / Math.max(1, rows.length - 1));
+    const y = v => padT + (H - padT - padB) * (1 - (v - mn) / (mx - mn));
+    let html = '';
+    for (let g = 0; g <= 4; g++) {
+      const v = mn + (mx - mn) * g / 4;
+      html += `<line x1="${padL}" y1="${y(v)}" x2="${W-padR}" y2="${y(v)}" stroke="#334155" stroke-width="1"/>`;
+      html += `<text x="${padL-6}" y="${y(v)+4}" fill="#94a3b8" font-size="11" text-anchor="end">${v.toFixed(3)}</text>`;
+    }
+    html += `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H-padB}" stroke="#475569" stroke-width="1.5"/>`;
+    html += `<line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="#475569" stroke-width="1.5"/>`;
+    if (rows.length > 1) {
+      const line = (sel, key, color) => {
+        const pts = rows.map((r, i) => r[key] != null ? `${x(i).toFixed(1)},${y(r[key]).toFixed(1)}` : null)
+                       .filter(Boolean).join(' ');
+        if (pts) html += `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+      };
+      line('#tl', 'tl', '#4ade80');          // total
+      line('#df', 'diff', '#60a5fa');         // diffuse
+      line('#pv', 'phys', '#fb923c');         // physics
+      const last = rows[rows.length-1];
+      if (last.tl != null) html += `<circle cx="${x(rows.length-1)}" cy="${y(last.tl)}" r="4" fill="#4ade80"/>`;
+    }
+    // PSNR 曲线（独立刻度，右轴）
+    const withPsnr = rows.filter(r => r.psnr !== null);
+    if (withPsnr.length > 1) {
+      const ps = withPsnr.map(r => r.psnr);
+      let pmn = Math.min(...ps), pmx = Math.max(...ps);
+      const ppad = Math.max(0.1, (pmx - pmn) * 0.25);
+      pmn -= ppad; pmx += ppad;
+      const py = v => padT + (H - padT - padB) * (1 - (v - pmn) / (pmx - pmn));
+      const idxs = withPsnr.map(r => rows.indexOf(r));
+      const ppts = withPsnr.map((r, i) => `${x(idxs[i]).toFixed(1)},${py(r.psnr).toFixed(1)}`).join(' ');
+      html += `<polyline points="${ppts}" fill="none" stroke="#f472b6" stroke-width="2.2" stroke-dasharray="6,4" stroke-linejoin="round"/>`;
+      html += `<text x="${W-padR-4}" y="${padT+8}" fill="#f472b6" font-size="11" text-anchor="end">PSNR ${pmx.toFixed(1)}dB</text>`;
+    }
+    svg.innerHTML = html;
+  }
+
+  function renderTable(rows) {
+    const box = document.getElementById('log-table');
+    const reversed = [...rows].reverse().slice(0, 30);
+    let html = '<table><tr><th>Epoch</th><th>Total</th><th>Diff</th><th>Phys</th><th>PSNR(dB)</th><th>SSIM</th><th>SAM(°)</th></tr>';
+    for (const r of reversed) {
+      const hl = r.psnr !== null ? ' style="color:#4ade80;"' : '';
+      html += `<tr><td>${r.ep}</td><td>${r.tl!=null?r.tl.toFixed(4):'--'}</td>` +
+              `<td>${r.diff!=null?r.diff.toFixed(4):'--'}</td>` +
+              `<td>${r.phys!=null?r.phys.toFixed(4):'--'}</td>` +
+              `<td${hl}>${r.psnr!=null?r.psnr.toFixed(2):'--'}</td>` +
+              `<td>${r.ssim!=null?r.ssim.toFixed(4):'--'}</td>` +
+              `<td>${r.sam!=null?r.sam.toFixed(2):'--'}</td></tr>`;
+    }
+    box.innerHTML = html + '</table>';
+  }
+
+  function renderLog(text, curEp) {
+    const box = document.getElementById('log-table');
+    if (curEp < 1) return;
+    const lines = text.split('\n').filter(l => l.trim() && /Epoch|viz|Training|Final/.test(l));
+    box.innerHTML = lines.slice(-40).join('\n');
+  }
+
+  refresh();
+  setInterval(refresh, 4000);
+</script>
+</body>
+</html>
