@@ -48,21 +48,21 @@ data/
 
 ## 复现流程
 
-### 阶段2：PSGNet 全监督基线（结果：Best 28.84dB / SSIM 0.8911 / SAM 6.13°）
+### 阶段2：PSGNet 全监督基线
 
 ```bash
 python scripts/train_psgnet_phase2.py --train_hazy_dir data/train --epochs 100
 python scripts/test_psgnet_phase2.py
 ```
 
-### 阶段3：自编码器（AE 重建上界 ≈ 24.95dB）
+### 阶段3：自编码器（AE）
 
 ```bash
 python models/diffusion/ldm_hsi_phase3.py
 # 产物: checkpoints/ldm_hsi_autoencoder_best_phase3.pth
 ```
 
-### 阶段3：条件LDM + FiLM（当前最优扩散路线，Final 20.63dB / SSIM 0.6891 / SAM 10.39°）
+### 阶段3：条件LDM + FiLM（当前最优扩散路线）
 
 ```bash
 python scripts/train_conditional_ldm_phase3_full.py \
@@ -102,19 +102,9 @@ python serve.py              # 启动 http://localhost:8010
 
 浏览器打开 `webui/dashboard.html`（总览）或各阶段详情页，页面每 4 秒轮询 `/api/status` 展示损失曲线、验证 PSNR、采样可视化。
 
-## 关键结论坐标系（统一评测口径：best ckpt + 全测试集 264 对）
+## 技术要点与已知问题
 
-| 方法 | PSNR | SSIM | SAM |
-|------|------|------|-----|
-| PSGNet 基线（阶段2） | **28.84** | 0.8911 | 6.13° |
-| AE 重建上界（latent 压缩极限） | **24.95** | — | — |
-| 条件LDM+FiLM 100步（阶段3） | **20.63** | 0.6891 | 10.39° |
-| DDIM 少步（10/25/50步） | ≈19.0 | — | — |
-
-已知问题：LDM 天花板受 AE 重建上界 24.95dB 限制；扩散采样仍损失 ~4dB（方向 B 待攻关）；DDIM 步数 25→50 已无增益，瓶颈在条件注入通路而非步数。
-
-## 注意事项
-
+- 扩散模型天花板受 AE 重建上界限制（latent 压缩极限）；扩散采样环节仍有压缩空间（方向 B 待攻关）
 - latent 缓存落盘为**未归一化** latent，评测脚本加载后须用 `z_stats` 做 `(z-mean)/std` 归一化（eval_ddim_guidance.py 已内置）
-- DDIM 的 `x0_pred` **不可** clamp 到 [-1,1]（latent 空间值域远超图像域，clamp 会致 50 步采样崩塌）
+- DDIM 的 `x0_pred` **不可** clamp 到 [-1,1]（latent 空间值域远超图像域，clamp 会致多步采样崩塌）
 - 测试时物理引导（DCP 梯度）训练零改动，仅在 `t ≤ guide_start_t` 且 `s>0` 时生效
