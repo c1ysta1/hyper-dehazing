@@ -1,0 +1,85 @@
+{
+  "meta": {
+    "ckpt": "checkpoints/conditional_ldm_phase3_full_mfilm_best.pth",
+    "z_stats": "checkpoints/conditional_ldm_phase3_full_mfilm_z_stats.pth",
+    "ae_ckpt": "checkpoints/ldm_hsi_autoencoder_best_phase3.pth",
+    "lat_cache": "checkpoints/latent_cache_phase3",
+    "name": "mphase3_film_ddim",
+    "module": "film",
+    "timesteps": 100,
+    "eta": 0.0,
+    "guide_start_t": 50,
+    "ddim_steps": [
+      10,
+      25,
+      50,
+      100
+    ],
+    "guidance_s": [
+      0.0,
+      0.8
+    ],
+    "seeds": [
+      42
+    ]
+  },
+  "results": {
+    "ddim10_s0.0": {
+      "ddim_steps": 10,
+      "guidance_s": 0.0,
+      "psnr": 19.04
+    },
+    "ddim10_s0.8": {
+      "ddim_steps": 10,
+      "guidance_s": 0.8,
+      "psnr": 19.03
+    },
+    "ddim25_s0.0": {
+      "ddim_steps": 25,
+      "guidance_s": 0.0,
+      "psnr": 18.98
+    },
+    "ddim25_s0.8": {
+      "ddim_steps": 25,
+      "guidance_s": 0.8,
+      "psnr": 18.96
+    },
+    "ddim50_s0.0": {
+      "ddim_steps": 50,
+      "guidance_s": 0.0,
+      "psnr": 18.97
+    },
+    "ddim50_s0.8": {
+      "ddim_steps": 50,
+      "guidance_s": 0.8,
+      "psnr": 18.92
+    },
+    "ddim100_s0.0": {
+      "ddim_steps": 100,
+      "guidance_s": 0.0,
+      "psnr": 18.96
+    },
+    "ddim100_s0.8": {
+      "ddim_steps": 100,
+      "guidance_s": 0.8,
+      "psnr": 18.82
+    },
+    "ddpm100_s0.0_baseline": {
+      "sampler": "DDPM",
+      "ddim_steps": null,
+      "guidance_s": 0.0,
+      "psnr": 20.95
+    },
+    "ddpm100_s0.8_baseline": {
+      "sampler": "DDPM",
+      "ddim_steps": null,
+      "guidance_s": 0.8,
+      "psnr": 21.14
+    }
+  },
+  "note": [
+    "修复 clamp(-1,1) bug 后的正确结果（seed=42）。旧版 ddim50 9.09dB 为 clamp 截断导致的崩坏数据，已作废。",
+    "结论：DDIM 各步数均 ~19dB 与步数无关，低于 DDPM100 约 2dB；物理引导 s=0.8 在 DDIM 下无增益。",
+    "SSIM/SAM 以服务器原始评测 JSON 为准。"
+  ]
+}
