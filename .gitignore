@@ -6,6 +6,7 @@ checkpoints/
 latent_cache*/
 *.pth
 *.pt
+checkpoints/_diag_*
 
 # ===== 日志与结果 =====
 logs/
