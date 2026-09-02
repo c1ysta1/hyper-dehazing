@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>评测结果总览 · 阶段3及后续</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 24px; }
+  .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px;
+          border: 1px solid #334155; }
+  h1 { font-size: 20px; margin-bottom: 4px; color: #f1f5f9; }
+  h2 { font-size: 16px; margin-bottom: 10px; color: #f1f5f9; }
+  .sub { color: #94a3b8; font-size: 13px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 10px 0 4px; font-size: 12px; color: #94a3b8; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid #334155; white-space: nowrap; }
+  th { color: #94a3b8; font-weight: 500; }
+  td:first-child, th:first-child { text-align: left; }
+  tr:hover td { background: #1e293b; }
+  .hl { color: #4ade80; font-weight: 700; }
+  .worst { color: #f87171; }
+  svg { width: 100%; height: 260px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  @media (max-width: 980px) { .two-col { grid-template-columns: 1fr; } .three-col { grid-template-columns: 1fr; } }
+  .nav-links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+  .nav-links a { color: #60a5fa; font-size: 13px; text-decoration: none; padding: 4px 10px;
+                 border: 1px solid #334155; border-radius: 999px; }
+  .nav-links a:hover { border-color: #60a5fa; }
+  .stat-grid { display: flex; gap: 16px; flex-wrap: wrap; }
+  .stat { flex: 1; min-width: 130px; background: #0f172a; border-radius: 10px; padding: 14px 16px;
+          border: 1px solid #334155; }
+  .stat .label { font-size: 12px; color: #94a3b8; }
+  .stat .value { font-size: 24px; font-weight: 700; margin-top: 4px; }
+  .stat .value.green { color: #4ade80; } .stat .value.blue { color: #60a5fa; }
+  .stat .value.amber { color: #fbbf24; } .stat .value.pink { color: #f472b6; }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+         background: #0f172a; border: 1px solid #334155; color: #94a3b8; margin-left: 6px; }
+  .ref-line { stroke: #fbbf24; stroke-width: 1.5; stroke-dasharray: 6,4; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <a href="/" style="color:#60a5fa; font-size:13px; text-decoration:none;">&lt;- 返回多阶段总览</a>
+    <h1 style="margin-top:8px;">评测结果总览 · 阶段3及后续 <span class="tag">统一口径 best ckpt + blend=1.0 + 全测试集 264 对</span></h1>
+    <div class="sub">数据源: results/metrics_unified + results/metrics_guided + results/metrics_psgnet_phase2.json · 页面每 4 秒自动刷新</div>
+    <div class="nav-links">
+      <a href="/webui/dashboard.html">总览</a>
+      <a href="/webui/phase3_progress.html">阶段3 训练</a>
+      <a href="/webui/phase4_progress.html">阶段4 训练</a>
+      <a href="/webui/phase5_progress.html">阶段5 训练</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>关键节点指标</h2>
+    <div class="stat-grid" id="key-stats"></div>
+    <div class="legend">
+      <span><span class="swatch" style="background:#94a3b8;"></span>PSGNet 全监督基线</span>
+      <span><span class="swatch" style="background:#fbbf24;"></span>AE 压缩上界（LDM 数学硬顶）</span>
+      <span><span class="swatch" style="background:#4ade80;"></span>当前最优 LDM（FiLM + 物理引导）</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>各模型统一口径对比（blend=1.0 · 全测试集）</h2>
+    <div class="legend">
+      <span><span class="swatch" style="background:#94a3b8;"></span>PSGNet</span>
+      <span><span class="swatch" style="background:#fbbf24;"></span>AE 上界</span>
+      <span><span class="swatch" style="background:#60a5fa;"></span>阶段3 LDM 系列</span>
+      <span><span class="swatch" style="background:#f472b6;"></span>阶段4 物理训练</span>
+      <span><span class="swatch" style="background:#a78bfa;"></span>阶段5 无配对</span>
+      <span><span class="swatch" style="background:#4ade80;"></span>物理引导最优</span>
+    </div>
+    <div id="cmp-tables"></div>
+  </div>
+
+  <div class="card">
+    <h2>PSNR / SSIM / SAM 柱状对比</h2>
+    <div class="three-col">
+      <div><div class="sub">PSNR (dB, 越高越好)</div><svg id="chart-psnr" viewBox="0 0 900 260" preserveAspectRatio="none"></svg></div>
+      <div><div class="sub">SSIM (越高越好)</div><svg id="chart-ssim" viewBox="0 0 900 260" preserveAspectRatio="none"></svg></div>
+      <div><div class="sub">SAM (°, 越低越好)</div><svg id="chart-sam" viewBox="0 0 900 260" preserveAspectRatio="none"></svg></div>
+    </div>
+    <div class="sub" style="margin-top:8px;">参考线: PSNR 上界 24.95dB / PSGNet 28.84dB</div>
+  </div>
+
+  <div class="card">
+    <h2>阶段3 模块消融（条件注入通路是瓶颈）</h2>
+    <svg id="chart-ablate" viewBox="0 0 900 260" preserveAspectRatio="none"></svg>
+    <div class="sub" style="margin-top:8px;">FiLM(+0.17M) 使 18.34 → 20.95dB(+2.61)，远超 SE(+2.54)/CBAM(+2.16)/加深 d2(+0.49/10.6M)</div>
+  </div>
+
+  <div class="card">
+    <h2>物理约束两种注入方式对比</h2>
+    <div class="two-col">
+      <div>
+        <h2 style="font-size:14px;">训练 loss 注入（阶段3→阶段4，统一口径）</h2>
+        <svg id="chart-phys-train" viewBox="0 0 450 240" preserveAspectRatio="none"></svg>
+        <div class="sub">模型越强物理 loss 劣化越明显（FiLM −2.07 / d2 −1.36 / none +0.86）</div>
+      </div>
+      <div>
+        <h2 style="font-size:14px;">测试时物理引导（同一 FiLM 模型，s 扫描）</h2>
+        <svg id="chart-phys-guide" viewBox="0 0 450 240" preserveAspectRatio="none"></svg>
+        <div class="sub">训练零改动，s=0.8 后半段(t≤50)引导 +0.18dB 稳定增益</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>多种子稳定性验证（s=0 vs s=0.8，seeds 42/100/200）</h2>
+    <div id="multi-seed"></div>
+  </div>
+
+  <div class="card">
+    <h2>DDIM 少步采样（FiLM 模型）</h2>
+    <svg id="chart-ddim" viewBox="0 0 900 240" preserveAspectRatio="none"></svg>
+    <div class="sub">DDIM 50 步崩坏、25 步 18.17dB、10 步 18.81dB —— 均不及 DDPM 100 步 20.95dB（s=0）</div>
+  </div>
+
+<script>
+  const P = '/results/';
+  const URLS = {
+    psgnet: P + 'metrics_psgnet_phase2.json',
+    phase3_orig: P + 'metrics_unified/phase3_orig.json',
+    phase3_d2: P + 'metrics_unified/phase3_d2.json',
+    m_none: P + 'metrics_unified/mphase3_none.json',
+    m_se: P + 'metrics_unified/mphase3_se.json',
+    m_cbam: P + 'metrics_unified/mphase3_cbam.json',
+    m_film: P + 'metrics_unified/mphase3_film.json',
+    phase4_orig: P + 'metrics_unified/phase4_orig.json',
+    phase4_d2: P + 'metrics_unified/phase4_d2.json',
+    m4_film: P + 'metrics_unified/mphase4_film.json',
+    phase5_orig: P + 'metrics_unified/phase5_orig.json',
+    phase5_noasm: P + 'metrics_unified/phase5_noasm_seed0.json',
+    m5_film: P + 'metrics_unified/mphase5_film.json',
+    guided_fine: P + 'metrics_guided/mphase3_film_guided.json',
+    guided_coarse: P + 'metrics_guided/mphase3_film_coarse_guided.json',
+    guided_full: P + 'metrics_guided/mphase3_film_full_guided.json',
+    guided_multi: P + 'metrics_guided/mphase3_film_multi_guided.json',
+    guided_ddim: P + 'metrics_guided/mphase3_film_ddim_ddim.json',
+  };
+  const AE_CEILING = 24.95;
+  const state = {};
+
+  async function fetchJson(url) {
+    try {
+      const r = await fetch(url + '?t=' + Date.now());
+      if (!r.ok) return null;
+      const j = await r.json();
+      // 统一口径: 把带点的键名 blend_1.0 / blend_0.9 映射为可安全点访问的别名
+      if (j && typeof j === 'object') {
+        if (j['blend_1.0']) j.blend_1_0 = j['blend_1.0'];
+        if (j['blend_0.9']) j.blend_0_9 = j['blend_0.9'];
+      }
+      return j;
+    } catch (e) { return null; }
+  }
+
+  // ---- 工具: 柱状图 ----
+  function bars(svgId, rows, { valueOf, colorOf, fmt = v => v.toFixed(2), refs = [] } = {}) {
+    const svg = document.getElementById(svgId);
+    if (!rows.length) { svg.innerHTML = `<text x="450" y="130" fill="#64748b" font-size="13" text-anchor="middle">暂无数据</text>`; return; }
+    const W = svg.viewBox.baseVal.width, H = svg.viewBox.baseVal.height, padL = 60, padB = 52, padT = 18;
+    const vals = rows.map(valueOf).concat(refs.map(r => r.v));
+    let mx = Math.max(...vals), mn = Math.min(...vals, 0);
+    const pad = (mx - mn) * 0.12 || 1; mx += pad; if (mn > 0) mn = Math.max(0, mn - pad * 0.3);
+    const bw = Math.min(58, (W - padL - 20) / rows.length - 8);
+    const gap = (W - padL - bw * rows.length) / (rows.length + 1);
+    let html = '';
+    const y = v => padT + (H - padT - padB) * (1 - (v - mn) / (mx - mn || 1));
+    for (let g = 0; g <= 3; g++) { const v = mn + (mx - mn) * g / 3;
+      html += `<line x1="${padL}" y1="${y(v)}" x2="${W-10}" y2="${y(v)}" stroke="#1e293b" stroke-width="1"/>`;
+      html += `<text x="${padL-6}" y="${y(v)+4}" fill="#94a3b8" font-size="11" text-anchor="end">${v.toFixed(1)}</text>`;
+    }
+    rows.forEach((r, i) => {
+      const x = padL + gap + i * (bw + gap);
+      const v = valueOf(r), h = Math.max(2, (H - padT - padB) * (v - mn) / (mx - mn || 1));
+      const col = colorOf(r);
+      html += `<rect x="${x}" y="${y(v)}" width="${bw}" height="${h}" rx="4" fill="${col}" opacity="0.92"/>`;
+      html += `<text x="${x+bw/2}" y="${y(v)-5}" fill="#e2e8f0" font-size="12" font-weight="700" text-anchor="middle">${fmt(v)}</text>`;
+      html += `<text x="${x+bw/2}" y="${H-padB+14}" fill="#94a3b8" font-size="11" text-anchor="middle">${r.short}</text>`;
+    });
+    refs.forEach(r => {
+      const x0 = padL, x1 = W - 10, yy = y(r.v);
+      html += `<line class="ref-line" x1="${x0}" y1="${yy}" x2="${x1}" y2="${yy}"/>`;
+      html += `<text x="${x1-4}" y="${yy-5}" fill="#fbbf24" font-size="11" text-anchor="end">${r.label} ${r.v.toFixed(2)}</text>`;
+    });
+    html += `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H-padB}" stroke="#475569" stroke-width="1.5"/>`;
+    html += `<line x1="${padL}" y1="${H-padB}" x2="${W-10}" y2="${H-padB}" stroke="#475569" stroke-width="1.5"/>`;
+    svg.innerHTML = html;
+  }
+
+  // ---- 工具: 折线图 ----
+  function lines(svgId, series, { xOf = p => p.x, yOf = p => p.y, colors = [], refs = [] } = {}) {
+    const svg = document.getElementById(svgId);
+    const W = svg.viewBox.baseVal.width, H = svg.viewBox.baseVal.height, padL = 56, padB = 46, padT = 16;
+    const allPts = series.flatMap(s => s.pts);
+    let mx = Math.max(...allPts.map(yOf)), mn = Math.min(...allPts.map(yOf), ...refs.map(r => r.v));
+    const pad = (mx - mn) * 0.18 || 1; mx += pad; mn = Math.max(0, mn - pad * 0.3);
+    const xs = series.flatMap(s => s.pts.map(xOf));
+    const x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const X = v => padL + (W - padL - 12) * ((v - x0) / (x1 - x0 || 1));
+    const Y = v => padT + (H - padT - padB) * (1 - (v - mn) / (mx - mn || 1));
+    let html = '';
+    for (let g = 0; g <= 3; g++) { const v = mn + (mx - mn) * g / 3;
+      html += `<line x1="${padL}" y1="${Y(v)}" x2="${W-12}" y2="${Y(v)}" stroke="#1e293b" stroke-width="1"/>`;
+      html += `<text x="${padL-6}" y="${Y(v)+4}" fill="#94a3b8" font-size="11" text-anchor="end">${v.toFixed(1)}</text>`;
+    }
+    series.forEach((s, si) => {
+      const col = colors[si % colors.length];
+      if (s.pts.length > 1) {
+        const pts = s.pts.map(p => `${X(xOf(p)).toFixed(1)},${Y(yOf(p)).toFixed(1)}`).join(' ');
+        html += `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round"/>`;
+      }
+      s.pts.forEach(p => {
+        html += `<circle cx="${X(xOf(p))}" cy="${Y(yOf(p))}" r="3.5" fill="${col}"/>`;
+        html += `<text x="${X(xOf(p))}" y="${Y(yOf(p))-8}" fill="#cbd5e1" font-size="11" text-anchor="middle">${p.v != null ? p.v.toFixed(2) : ''}</text>`;
+      });
+      html += `<text x="${X(xOf(s.pts[s.pts.length-1]))}" y="${Y(yOf(s.pts[s.pts.length-1]))-16}" fill="${col}" font-size="12" font-weight="600" text-anchor="end">${s.label}</text>`;
+    });
+    refs.forEach(r => { const yy = Y(r.v);
+      html += `<line class="ref-line" x1="${padL}" y1="${yy}" x2="${W-12}" y2="${yy}"/>`;
+      html += `<text x="${W-16}" y="${yy-5}" fill="#fbbf24" font-size="11" text-anchor="end">${r.label} ${r.v.toFixed(2)}</text>`;
+    });
+    html += `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H-padB}" stroke="#475569" stroke-width="1.5"/>`;
+    html += `<line x1="${padL}" y1="${H-padB}" x2="${W-12}" y2="${H-padB}" stroke="#475569" stroke-width="1.5"/>`;
+    svg.innerHTML = html;
+  }
+
+  // ---- 渲染: 关键节点 ----
+  function renderKey() {
+    const psgnet = state.psgnet, film = state.m_film, multi = state.guided_multi;
+    const best = multi && multi.results['s=0.8'] ? multi.results['s=0.8'].psnr_mean : null;
+    const html = `
+      <div class="stat"><div class="label">PSGNet（全监督基线）</div><div class="value">${psgnet ? psgnet.psnr.toFixed(2) + ' dB' : '--'}</div></div>
+      <div class="stat"><div class="label">AE 压缩上界（LDM 硬顶）</div><div class="value amber">${AE_CEILING.toFixed(2)} dB</div></div>
+      <div class="stat"><div class="label">阶段3+FiLM（训练最优）</div><div class="value blue">${film ? film.blend_1_0.psnr.toFixed(2) + ' dB' : '--'}</div></div>
+      <div class="stat"><div class="label">+ 测试时物理引导 s=0.8</div><div class="value green">${best ? best.toFixed(2) + ' dB' : '--'}</div></div>
+      <div class="stat"><div class="label">无配对训练（阶段5）</div><div class="value pink">${state.phase5_orig ? state.phase5_orig.blend_1_0.psnr.toFixed(2) + ' dB' : '--'}</div></div>`;
+    document.getElementById('key-stats').innerHTML = html;
+  }
+
+  // ---- 渲染: 对比表 ----
+  const GROUPS = [
+    { key: '阶段3 LDM 系列', color: '#60a5fa', items: [
+      { id: 'phase3_orig', name: '阶段3 原始结构', note: '无条件基线' },
+      { id: 'phase3_d2', name: '阶段3 UNet depth=2', note: '加深 +0.49/10.6M' },
+      { id: 'm_none', name: '阶段3 无模块(mnone)', note: 'FiLM 对照' },
+      { id: 'm_se', name: '阶段3 +SE', note: '+2.54' },
+      { id: 'm_cbam', name: '阶段3 +CBAM', note: '+2.16' },
+      { id: 'm_film', name: '阶段3 +FiLM', note: '+2.61, 训练最优' },
+    ]},
+    { key: '阶段4 物理训练 loss', color: '#f472b6', items: [
+      { id: 'phase4_orig', name: '阶段4 原始结构', note: '较 p3 19.48→20.34 (+0.86)' },
+      { id: 'phase4_d2', name: '阶段4 depth=2', note: '较 p3_d2 19.97→18.61 (−1.36)' },
+      { id: 'm4_film', name: '阶段4 +FiLM', note: '较 p3_film 20.95→18.89 (−2.07)' },
+    ]},
+    { key: '阶段5 无配对', color: '#a78bfa', items: [
+      { id: 'phase5_orig', name: '阶段5 原始(自监督)', note: '仅雾图训练' },
+      { id: 'phase5_noasm', name: '阶段5 去 ASM', note: '反高 +0.06 (18.14→18.20)' },
+      { id: 'm5_film', name: '阶段5 +FiLM', note: '' },
+    ]},
+  ];
+
+  function renderTables() {
+    const psgnet = state.psgnet;
+    let html = '';
+    GROUPS.forEach(g => {
+      html += `<div style="margin-top:14px;"><div class="sub" style="margin-bottom:6px;">— ${g.key} —</div><table>
+        <tr><th>模型</th><th>PSNR (dB)</th><th>SSIM</th><th>SAM (°)</th><th>说明</th></tr>`;
+      const rows = g.items.map(it => {
+        const d = state[it.id]; if (!d || !d.blend_1_0) return null;
+        const b = d.blend_1_0;
+        const isBest = it.id === 'm_film';
+        return `<tr><td>${it.name}</td>
+          <td class="${isBest ? 'hl' : ''}">${b.psnr.toFixed(2)}</td>
+          <td>${b.ssim.toFixed(4)}</td>
+          <td>${b.sam.toFixed(2)}</td>
+          <td style="color:#94a3b8;">${it.note}</td></tr>`;
+      }).filter(Boolean);
+      html += rows.join('') + '</table></div>';
+    });
+    if (psgnet) html = `<div style="margin-top:14px;"><div class="sub" style="margin-bottom:6px;">— 基线 —</div><table>
+      <tr><th>模型</th><th>PSNR (dB)</th><th>SSIM</th><th>SAM (°)</th><th>说明</th></tr>
+      <tr><td>PSGNet（全监督 SOTA）</td><td class="hl">${psgnet.psnr.toFixed(2)}</td><td>${psgnet.ssim.toFixed(4)}</td><td>${psgnet.sam.toFixed(2)}</td><td style="color:#94a3b8;">17.77M</td></tr></table></div>` + html;
+    document.getElementById('cmp-tables').innerHTML = html;
+  }
+
+  // ---- 渲染: PSNR/SSIM/SAM 柱状 ----
+  function renderBars() {
+    const mk = (id) => ({ id, short: nameMap[id], d: state[id] });
+    const nameMap = {
+      phase3_orig: 'p3', phase3_d2: 'p3_d2', m_none: 'none', m_se: 'SE', m_cbam: 'CBAM', m_film: 'FiLM',
+      phase4_orig: 'p4', phase4_d2: 'p4_d2', m4_film: 'p4_FiLM',
+      phase5_orig: 'p5', phase5_noasm: 'p5_noASM', m5_film: 'p5_FiLM',
+    };
+    const ids = Object.keys(nameMap);
+    const all = [];
+    const psgnet = state.psgnet;
+    if (psgnet) all.push({ short: 'PSGNet', d: { blend_1_0: psgnet } });
+    ids.forEach(id => { const d = state[id]; if (d && d.blend_1_0) all.push({ short: nameMap[id], d }); });
+    const colorOf = (r) => {
+      if (r.short === 'PSGNet') return '#94a3b8';
+      if (r.short.startsWith('p4')) return '#f472b6';
+      if (r.short.startsWith('p5')) return '#a78bfa';
+      if (r.short === 'FiLM') return '#4ade80';
+      return '#60a5fa';
+    };
+    bars('chart-psnr', all, { valueOf: r => r.d.blend_1_0.psnr, colorOf,
+      refs: [{ label: 'AE上界', v: AE_CEILING }, { label: 'PSGNet', v: psgnet ? psgnet.psnr : 28.84 }] });
+    bars('chart-ssim', all, { valueOf: r => r.d.blend_1_0.ssim, colorOf });
+    bars('chart-sam', all, { valueOf: r => r.d.blend_1_0.sam, colorOf });
+  }
+
+  // ---- 渲染: 阶段3 模块消融 ----
+  function renderAblate() {
+    const rows = ['m_none', 'm_se', 'm_cbam', 'm_film', 'phase3_d2', 'phase3_orig']
+      .map(id => ({ short: id === 'm_none' ? 'none' : id === 'm_se' ? 'SE' : id === 'm_cbam' ? 'CBAM' : id === 'm_film' ? 'FiLM' : id === 'phase3_d2' ? 'd2' : 'orig', d: state[id] }))
+      .filter(r => r.d && r.d.blend_1_0);
+    const colorOf = r => r.short === 'FiLM' ? '#4ade80' : (r.short === 'd2' ? '#fbbf24' : '#60a5fa');
+    bars('chart-ablate', rows, { valueOf: r => r.d.blend_1_0.psnr, colorOf });
+  }
+
+  // ---- 渲染: 物理训练 vs 物理引导 ----
+  function renderPhysTrain() {
+    // 三次独立复现: 模型越强物理 loss 劣化越明显（统一口径 blend_1.0）
+    const data = [
+      { name: 'none', p3: state.phase3_orig, p4: state.phase4_orig },
+      { name: 'd2', p3: state.phase3_d2, p4: state.phase4_d2 },
+      { name: 'FiLM', p3: state.m_film, p4: state.m4_film },
+    ];
+    const series = [];
+    const cols = ['#60a5fa', '#f472b6'];
+    data.forEach((g, i) => {
+      const pts = [];
+      if (g.p3 && g.p3.blend_1_0) pts.push({ x: i, y: g.p3.blend_1_0.psnr, v: g.p3.blend_1_0.psnr });
+      if (g.p4 && g.p4.blend_1_0) pts.push({ x: i, y: g.p4.blend_1_0.psnr, v: g.p4.blend_1_0.psnr });
+      series.push({ label: g.name, pts });
+    });
+    lines('chart-phys-train', series, { colors: cols });
+  }
+
+  function renderPhysGuide() {
+    const fine = state.guided_fine, coarse = state.guided_coarse;
+    const pts = [];
+    if (fine) Object.entries(fine.results).forEach(([k, v]) => pts.push({ x: parseFloat(k.slice(2)), y: v.psnr, v: v.psnr }));
+    if (coarse) Object.entries(coarse.results).forEach(([k, v]) => pts.push({ x: parseFloat(k.slice(2)), y: v.psnr, v: v.psnr }));
+    pts.sort((a, b) => a.x - b.x);
+    lines('chart-phys-guide', [{ label: 's 扫描 (t≤50)', pts }], { colors: ['#4ade80'], refs: [] });
+  }
+
+  // ---- 渲染: 多种子 ----
+  function renderMulti() {
+    const d = state.guided_multi;
+    if (!d || !d.results) { document.getElementById('multi-seed').innerHTML = '<div class="sub">暂无数据</div>'; return; }
+    let html = '<table><tr><th>配置</th><th>PSNR (dB)</th><th>SSIM</th><th>SAM (°)</th><th>seed=42</th><th>seed=100</th><th>seed=200</th></tr>';
+    for (const [k, r] of Object.entries(d.results)) {
+      const seeds = (r.per_seed || []).map(s => s.psnr.toFixed(2)).join(' / ');
+      html += `<tr><td>${k}</td>
+        <td class="${k.includes('0.8') ? 'hl' : ''}">${r.psnr_mean.toFixed(3)} ± ${r.psnr_std.toFixed(3)}</td>
+        <td>${r.ssim_mean.toFixed(4)} ± ${r.ssim_std.toFixed(4)}</td>
+        <td>${r.sam_mean.toFixed(3)} ± ${r.sam_std.toFixed(3)}</td>
+        <td>${seeds}</td></tr>`;
+    }
+    html += '</table><div class="sub" style="margin-top:8px;">增益 +0.18±0.00 dB，三种子完全一致 —— 引导稳定</div>';
+    document.getElementById('multi-seed').innerHTML = html;
+  }
+
+  // ---- 渲染: DDIM ----
+  function renderDdim() {
+    const d = state.guided_ddim;
+    if (!d || !d.results) { document.getElementById('chart-ddim').innerHTML = `<text x="450" y="130" fill="#64748b" font-size="13" text-anchor="middle">暂无数据</text>`; return; }
+    const series = [];
+    const keys = Object.keys(d.results);
+    const byStep = {};
+    keys.forEach(k => { const r = d.results[k]; (byStep[r.ddim_steps] = byStep[r.ddim_steps] || []).push(r); });
+    const stepOrder = [10, 25, 50].filter(s => byStep[s]);
+    stepOrder.forEach(s => {
+      const pts = (byStep[s] || []).map(r => ({ x: r.guidance_s, y: r.psnr_mean, v: r.psnr_mean }));
+      series.push({ label: 'DDIM ' + s + '步', pts, xOf: p => p.x, yOf: p => p.y });
+    });
+    lines('chart-ddim', series, { colors: ['#60a5fa', '#f472b6', '#a78bfa'] });
+  }
+
+  async function refresh() {
+    const keys = Object.keys(URLS);
+    await Promise.all(keys.map(async k => { state[k] = await fetchJson(URLS[k]); }));
+    renderKey();
+    renderTables();
+    renderBars();
+    renderAblate();
+    renderPhysTrain();
+    renderPhysGuide();
+    renderMulti();
+    renderDdim();
+  }
+
+  refresh();
+  setInterval(refresh, 4000);
+</script>
+</body>
+</html>

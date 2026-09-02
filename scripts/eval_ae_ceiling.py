@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from rshpdid_dataset import ClearHSIDataset, scene_ids_in
-from models.diffusion.ldm_hsi_phase3 import HSIAutoEncoder, compute_psnr
+from models.diffusion.ldm_hsi_phase3 import HSIAutoEncoder, HSIAutoEncoderRes, compute_psnr
 from models.diffusion.conditional_ldm_phase3 import compute_sam, compute_ssim
 
 
@@ -65,6 +65,9 @@ def main():
     p.add_argument("--test_hazy_dir", type=str, default="F:/data/test",
                    help="用于确定测试场景 ID（与 AE 训练时的划分完全一致）")
     p.add_argument("--ae_ckpt", type=str, default="checkpoints/ldm_hsi_autoencoder_best_phase3.pth")
+    p.add_argument("--arch", type=str, default="simple", choices=["simple", "res"],
+                   help="AE 架构: simple=旧 plain conv, res=残差 AE-v2")
+    p.add_argument("--res_blocks", type=int, default=2)
     p.add_argument("--latent_ch", type=int, default=16)
     p.add_argument("--ae_base_ch", type=int, default=64)
     p.add_argument("--batch_size", type=int, default=4)
@@ -82,8 +85,13 @@ def main():
     print(f"train clear: {len(train_ds)} 张 | test clear: {len(test_ds)} 张 | 波段: {in_ch}",
           flush=True)
 
-    ae = HSIAutoEncoder(in_ch=in_ch, latent_ch=args.latent_ch,
-                        base_ch=args.ae_base_ch).to(device).eval()
+    if args.arch == "res":
+        ae = HSIAutoEncoderRes(in_ch=in_ch, latent_ch=args.latent_ch,
+                               base_ch=args.ae_base_ch,
+                               n_blocks=args.res_blocks).to(device).eval()
+    else:
+        ae = HSIAutoEncoder(in_ch=in_ch, latent_ch=args.latent_ch,
+                           base_ch=args.ae_base_ch).to(device).eval()
     ae.load_state_dict(torch.load(args.ae_ckpt, map_location=device))
 
     results = {}

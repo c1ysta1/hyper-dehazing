@@ -41,8 +41,16 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# 二面体翻转 TTA：均为自逆变换，latent(H/W 维)与解码图像可共用
+DIHEDRAL = {
+    "id": lambda x: x,
+    "hflip": lambda x: torch.flip(x, dims=[-1]),
+    "vflip": lambda x: torch.flip(x, dims=[-2]),
+    "rot180": lambda x: torch.flip(x, dims=[-2, -1]),
+}
+
 from rshpdid_dataset import RSHPDIDDataset
-from models.diffusion.ldm_hsi_phase3 import HSIAutoEncoder, compute_psnr
+from models.diffusion.ldm_hsi_phase3 import HSIAutoEncoder, HSIAutoEncoderRes, compute_psnr
 from models.diffusion.conditional_ldm_phase3 import (
     ConditionalLatentUNet,
     compute_sam,
@@ -52,15 +60,20 @@ from models.diffusion.bridge_ldm import HazeBridge, sample_bridge
 
 
 @torch.no_grad()
-def eval_one(model, ae, z_stats, z_test_hazy, gt_all, device, bridge,
-             n_steps, eta, batch_size, seed=42):
+def eval_one(models, ae, z_stats, z_test_hazy, gt_all, device, bridge,
+             n_steps, eta, batch_size, seed=42, n_starts=1, tta=False):
     """单个 (steps, eta, seed) 配置在全测试集上的评测。
 
+    models: 模型列表（>1 时为多模型集成，同一起点噪声各自采样、像素均值）。
     gt_all: 预加载的全量 GT 清晰图张量 (N,C,H,W)（避免多配置重复读盘）。
+    n_starts>1 时为多起点集成：K 个独立起点噪声各采一条轨迹，
+    解码后像素空间取均值（MSE 意义下的条件均值估计，方差缩减）。
+    tta=True 时叠加 4 次二面体翻转（latent 空间翻转，预测反翻转后均值）。
     """
     z_mean, z_std = z_stats["mean"], z_stats["std"]
     denorm = lambda z: z * z_std + z_mean
     n_test = len(z_test_hazy)
+    tfs = DIHEDRAL if tta else {"id": DIHEDRAL["id"]}
     psnrs, ssims, sams = [], [], []
     for i in range(0, n_test, batch_size):
         z_h = z_test_hazy[i:i + batch_size].to(device)
@@ -68,10 +81,18 @@ def eval_one(model, ae, z_stats, z_test_hazy, gt_all, device, bridge,
         # 固定起点噪声：同一 (steps, eta) 下不同 seed 可比；
         # 同一 seed 下不同 steps/eta 用同一起点，差异仅来自轨迹
         torch.manual_seed(seed + i)
-        start_noise = torch.randn_like(z_h)
-        z_pred = sample_bridge(model, z_h, bridge, n_steps,
-                                eta=eta, start_noise=start_noise, device=device)
-        pred = ae.decode(denorm(z_pred)).clamp(0, 1)
+        start_noises = [torch.randn_like(z_h) for _ in range(n_starts)]
+        preds = []
+        for tfn in tfs.values():
+            for sn in start_noises:
+                imgs = []
+                for mdl in models:
+                    z_pred = sample_bridge(mdl, tfn(z_h), bridge, n_steps,
+                                           eta=eta, start_noise=tfn(sn), device=device)
+                    imgs.append(ae.decode(denorm(z_pred)).clamp(0, 1))
+                img = torch.stack(imgs, 0).mean(0) if len(imgs) > 1 else imgs[0]
+                preds.append(tfn(img))
+        pred = torch.stack(preds, 0).mean(0) if len(preds) > 1 else preds[0]
         for j in range(pred.size(0)):
             psnrs.append(compute_psnr(pred[j:j + 1], gt_raw[j:j + 1]).item())
             ssims.append(compute_ssim(pred[j:j + 1], gt_raw[j:j + 1]).item())
@@ -92,6 +113,9 @@ def main():
     p.add_argument("--clear_dir", type=str, default="data/clear")
     p.add_argument("--latent_ch", type=int, default=16)
     p.add_argument("--ae_base_ch", type=int, default=64)
+    p.add_argument("--ae_arch", type=str, default="simple", choices=["simple", "res"],
+                   help="AE 架构: simple=旧 plain conv, res=残差 AE-v2")
+    p.add_argument("--ae_res_blocks", type=int, default=2)
     p.add_argument("--base_ch", type=int, default=192)
     p.add_argument("--time_emb_dim", type=int, default=256)
     p.add_argument("--depth", type=int, default=1)
@@ -109,6 +133,15 @@ def main():
                    help="步进噪声系数列表（0=确定性，1=与训练边缘分布一致）")
     p.add_argument("--batch_size", type=int, default=8)
     p.add_argument("--seeds", type=int, nargs="+", default=[42])
+    p.add_argument("--n_starts", type=int, default=1,
+                   help="多起点集成：每个样本 K 个独立起点噪声各采一条轨迹，"
+                        "解码后像素均值（1=原单起点行为）")
+    p.add_argument("--tta", action="store_true",
+                   help="4 次二面体翻转 TTA（id/hflip/vflip/rot180，latent 空间翻转，"
+                        "预测反翻转后像素均值）")
+    p.add_argument("--ckpt2", type=str, default=None,
+                   help="可选第二模型 checkpoint：双模型集成（同一起点噪声各自采样，"
+                        "解码后像素均值）")
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -120,8 +153,13 @@ def main():
     in_ch = ds_probe.num_bands()
     print(f"num_bands={in_ch}", flush=True)
 
-    ae = HSIAutoEncoder(in_ch=in_ch, latent_ch=args.latent_ch,
-                        base_ch=args.ae_base_ch).to(device).eval()
+    if args.ae_arch == "res":
+        ae = HSIAutoEncoderRes(in_ch=in_ch, latent_ch=args.latent_ch,
+                               base_ch=args.ae_base_ch,
+                               n_blocks=args.ae_res_blocks).to(device).eval()
+    else:
+        ae = HSIAutoEncoder(in_ch=in_ch, latent_ch=args.latent_ch,
+                            base_ch=args.ae_base_ch).to(device).eval()
     ae.load_state_dict(torch.load(args.ae_ckpt, map_location=device))
     for prm in ae.parameters():
         prm.requires_grad_(False)
@@ -130,6 +168,16 @@ def main():
                                   time_emb_dim=args.time_emb_dim, base_ch=args.base_ch,
                                   depth=args.depth, module=args.module).to(device).eval()
     model.load_state_dict(torch.load(args.ckpt, map_location=device))
+
+    # 可选第二模型：多模型集成（同一起点噪声各自采样，解码后像素均值）
+    models = [model]
+    if args.ckpt2:
+        model2 = ConditionalLatentUNet(in_ch=args.latent_ch, cond_ch=args.latent_ch,
+                                       time_emb_dim=args.time_emb_dim, base_ch=args.base_ch,
+                                       depth=args.depth, module=args.module).to(device).eval()
+        model2.load_state_dict(torch.load(args.ckpt2, map_location=device))
+        models.append(model2)
+        print(f"model ensemble: {len(models)} models ({args.ckpt} + {args.ckpt2})", flush=True)
 
     z_stats = torch.load(args.z_stats, map_location=device)
 
@@ -156,12 +204,15 @@ def main():
     results = {}
     for steps in args.steps:
         for eta in args.etas:
-            key = f"bridge{steps}_eta{eta}"
+            key = (f"bridge{steps}_eta{eta}"
+                   + (f"_ens{args.n_starts}" if args.n_starts > 1 else "")
+                   + ("_tta" if args.tta else ""))
             vals = []
             for seed in args.seeds:
                 psnr, ssim, sam = eval_one(
-                    model, ae, z_stats, z_test_hazy, ds_probe, device, bridge,
-                    steps, eta, args.batch_size, seed=seed)
+                    models, ae, z_stats, z_test_hazy, gt_all, device, bridge,
+                    steps, eta, args.batch_size, seed=seed,
+                    n_starts=args.n_starts, tta=args.tta)
                 vals.append((psnr, ssim, sam))
                 print(f"  {key} seed={seed}: PSNR={psnr:.2f}  SSIM={ssim:.4f}  "
                       f"SAM={sam:.2f}", flush=True)

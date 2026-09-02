@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from rshpdid_dataset import RSHPDIDDataset
-from models.diffusion.ldm_hsi_phase3 import HSIAutoEncoder, compute_psnr
+from models.diffusion.ldm_hsi_phase3 import HSIAutoEncoder, HSIAutoEncoderRes, compute_psnr
 from models.diffusion.conditional_ldm_phase3 import (
     ConditionalLatentUNet,
     compute_sam,
@@ -60,6 +60,40 @@ def bridge_sample_denorm(model, z_hazy, bridge, device, denorm=None, eta=0.0, st
     if denorm is not None:
         z = denorm(z)
     return z
+
+
+class EMAHelper:
+    """权重指数滑动平均（扩散模型标准技巧）。
+
+    shadow = d·shadow + (1-d)·param；eval/best 保存时 swap_in 用 EMA 权重，
+    训练继续用原始权重。模型无 BN/整数 buffer（已确认 ConditionalLatentUNet
+    纯参数），shadow 直接克隆 state_dict 即可。
+    """
+
+    def __init__(self, model, decay=0.999):
+        self.decay = decay
+        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        self.backup = None
+
+    @torch.no_grad()
+    def update(self, model):
+        d = self.decay
+        for k, v in model.state_dict().items():
+            s = self.shadow[k]
+            if v.dtype.is_floating_point:
+                s.mul_(d).add_(v.detach(), alpha=1.0 - d)
+            else:
+                s.copy_(v.detach())
+
+    @torch.no_grad()
+    def swap_in(self, model):
+        self.backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(self.shadow)
+
+    @torch.no_grad()
+    def swap_out(self, model):
+        model.load_state_dict(self.backup)
+        self.backup = None
 
 
 def encode_to_latent(dataset, autoencoder, device, batch_size=16, desc=""):
@@ -128,7 +162,13 @@ def train(args):
     print(f"Bands: {in_ch}, size: {H}x{W}")
 
     # ---------------- 冻结自编码器 ----------------
-    autoencoder = HSIAutoEncoder(in_ch=in_ch, latent_ch=args.latent_ch, base_ch=args.ae_base_ch).to(device)
+    if args.ae_arch == "res":
+        autoencoder = HSIAutoEncoderRes(in_ch=in_ch, latent_ch=args.latent_ch,
+                                         base_ch=args.ae_base_ch,
+                                         n_blocks=args.ae_res_blocks).to(device)
+    else:
+        autoencoder = HSIAutoEncoder(in_ch=in_ch, latent_ch=args.latent_ch,
+                                     base_ch=args.ae_base_ch).to(device)
     ae_ckpt = Path(args.ae_ckpt) if args.ae_ckpt else Path(args.checkpoint_dir) / "ldm_hsi_autoencoder_best_phase3.pth"
     if not ae_ckpt.exists():
         raise FileNotFoundError(f"自编码器 checkpoint 不存在: {ae_ckpt}，请先运行 ldm_hsi_phase3.py")
@@ -140,7 +180,8 @@ def train(args):
 
     # ---------------- 流式编码到 latent（带磁盘缓存，与 phase3_full 同源可复用） ----------------
     lat_tag = "" if args.latent_ch == 16 else f"_lc{args.latent_ch}"
-    latent_cache_dir = Path(args.checkpoint_dir) / f"latent_cache_phase3{lat_tag}"
+    latent_cache_dir = (Path(args.lat_cache_dir) if args.lat_cache_dir
+                        else Path(args.checkpoint_dir) / f"latent_cache_phase3{lat_tag}")
     latent_cache_dir.mkdir(parents=True, exist_ok=True)
     cache_paths = {
         "z_train_hazy": latent_cache_dir / "z_train_hazy.pt",
@@ -208,6 +249,11 @@ def train(args):
     print(f"  s: {bridge.s[0]:.4f} -> {bridge.s[-1]:.4f}, "
           f"sigma: {bridge.sigma[0]:.4f} -> {bridge.sigma[-1]:.4f}")
 
+    # EMA 权重平均（可选）：best/终评/最终交付均使用 EMA 权重
+    ema = EMAHelper(model, decay=args.ema_decay) if args.ema else None
+    if ema is not None:
+        print(f"EMA enabled: decay={args.ema_decay}")
+
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     # lr 调度：线性 warmup + cosine 衰减（沿用 phase3_full）
@@ -245,7 +291,8 @@ def train(args):
     total_t0 = time.time()
 
     if args.resume and resume_ckpt.exists():
-        state = torch.load(resume_ckpt, map_location=device)
+        # weights_only=False: history/best_psnr 含 numpy 标量，torch>=2.6 默认 True 会拒绝加载
+        state = torch.load(resume_ckpt, map_location=device, weights_only=False)
         model.load_state_dict(state["model_state_dict"])
         optimizer.load_state_dict(state["optimizer_state_dict"])
         scheduler.load_state_dict(state["scheduler_state_dict"])
@@ -253,6 +300,9 @@ def train(args):
         history.update(state["history"])
         best_psnr = state.get("best_psnr", -1.0)
         log_print(f"[resume] 从第 {start_epoch} 轮续训，best PSNR={best_psnr:.2f}dB，历史 {len(history['train_loss'])} 条")
+        if ema is not None and state.get("ema_state") is not None:
+            ema.shadow = {k: v.to(device) for k, v in state["ema_state"].items()}
+            log_print("[resume] 已恢复 EMA shadow 权重")
 
     def save_resume(epoch_done):
         torch.save({
@@ -263,6 +313,7 @@ def train(args):
             "history": history,
             "best_psnr": best_psnr,
             "z_stats": z_stats,
+            "ema_state": ema.shadow if ema is not None else None,
         }, resume_ckpt)
 
     for epoch in range(start_epoch, args.epochs):
@@ -271,6 +322,20 @@ def train(args):
         losses = []
         for z_hazy, z_clear in train_loader:
             z_hazy, z_clear = z_hazy.to(device), z_clear.to(device)
+            # 数据增广：随机二面体翻转（hazy/clear 同步翻转，配对关系不变）。
+            # 雾合成为逐像素物理过程，翻转严格等变，增广合法；
+            # latent 空间翻转与图像空间翻转一致（AE 卷积保持空间结构）。
+            if args.augment:
+                mh = torch.rand(z_hazy.size(0), device=device) < 0.5
+                mv = torch.rand(z_hazy.size(0), device=device) < 0.5
+                if mh.any():
+                    idx = mh.nonzero(as_tuple=True)[0]
+                    z_hazy[idx] = z_hazy[idx].flip(-1)
+                    z_clear[idx] = z_clear[idx].flip(-1)
+                if mv.any():
+                    idx = mv.nonzero(as_tuple=True)[0]
+                    z_hazy[idx] = z_hazy[idx].flip(-2)
+                    z_clear[idx] = z_clear[idx].flip(-2)
             optimizer.zero_grad()
             t = torch.randint(0, args.timesteps, (z_clear.size(0),), device=device).long()
             # 【改动1】桥前向：z_t = s_t·z_clear + (1-s_t)·z_hazy + σ_t·ε
@@ -282,6 +347,8 @@ def train(args):
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
+            if ema is not None:
+                ema.update(model)
             losses.append(loss.item())
         avg_loss = float(np.mean(losses))
         ep_time = time.time() - ep_t0
@@ -291,11 +358,14 @@ def train(args):
         # 每 eval_every 轮在验证子集上采样评估
         if (epoch + 1) % args.eval_every == 0 or epoch == args.epochs - 1:
             model.eval()
+            if ema is not None:
+                ema.swap_in(model)
             with torch.no_grad():
                 # 固定验证起点噪声：best-ckpt 选择跨 epoch 可比
                 torch.manual_seed(1234)
                 z_pred = bridge_sample_denorm(model, val_hazy, bridge, device,
-                                               denorm=denorm, eta=args.sample_eta)
+                                               denorm=denorm, eta=args.sample_eta,
+                                               steps=args.val_steps)
                 pred = autoencoder.decode(z_pred).clamp(0, 1)
                 residual_blend = args.residual_blend
                 pred = residual_blend * pred + (1 - residual_blend) * val_hazy_raw
@@ -309,6 +379,8 @@ def train(args):
                 best_psnr = psnr
                 torch.save(model.state_dict(), checkpoint_dir / f"bridge_ldm_phase3{sfx}_best.pth")
                 torch.save(z_stats, checkpoint_dir / f"bridge_ldm_phase3{sfx}_z_stats.pth")
+            if ema is not None:
+                ema.swap_out(model)
             log_print(f"Epoch [{epoch+1}/{args.epochs}] train_loss={avg_loss:.4f} "
                       f"test_psnr={psnr:.2f} test_ssim={ssim:.4f} test_sam={sam:.2f} "
                       f"time={ep_time:.1f}s elapsed={time.time()-total_t0:.0f}s")
@@ -319,13 +391,18 @@ def train(args):
         # 周期生成采样可视化（供网页实时显示）
         if (epoch + 1) % args.viz_every == 0 or epoch == args.epochs - 1:
             model.eval()
+            if ema is not None:
+                ema.swap_in(model)
             with torch.no_grad():
                 z_v = z_test_hazy[:args.viz_samples].to(device)
                 z_vp = bridge_sample_denorm(model, z_v, bridge, device,
-                                            denorm=denorm, eta=args.sample_eta)
+                                            denorm=denorm, eta=args.sample_eta,
+                                            steps=args.val_steps)
                 pred_v = autoencoder.decode(z_vp).clamp(0, 1)
                 pred_v = args.residual_blend * pred_v + (1 - args.residual_blend) * vis_hazy[:args.viz_samples].to(device)
                 pred_v = pred_v.cpu().numpy()
+            if ema is not None:
+                ema.swap_out(model)
             build_sample_figure(
                 [to_rgb(v.numpy(), 1.3) for v in vis_hazy],
                 [to_rgb(p) for p in pred_v],
@@ -339,7 +416,12 @@ def train(args):
             save_resume(epoch)
 
     # ---------------- 保存 ----------------
+    # 最终交付权重：启用 EMA 时保存 EMA shadow（resume 里另存 raw + ema_state）
+    if ema is not None:
+        ema.swap_in(model)
     torch.save(model.state_dict(), checkpoint_dir / f"bridge_ldm_phase3{sfx}.pth")
+    if ema is not None:
+        ema.swap_out(model)
     save_resume(args.epochs - 1)
     with open(checkpoint_dir / f"history_bridge_ldm_phase3{sfx}.json", "w") as f:
         json.dump(history, f, indent=2)
@@ -379,7 +461,8 @@ def train(args):
             hazy_raw = torch.stack([test_ds[k][0] for k in range(i, min(i+bs_test, n_test))]).to(device)
             gt_raw = torch.stack([test_ds[k][1] for k in range(i, min(i+bs_test, n_test))]).to(device)
             z_p = bridge_sample_denorm(model, z_h, bridge, device,
-                                       denorm=denorm, eta=args.sample_eta)
+                                       denorm=denorm, eta=args.sample_eta,
+                                       steps=args.val_steps)
             pred = autoencoder.decode(z_p).clamp(0, 1)
             pred = args.residual_blend * pred + (1 - args.residual_blend) * hazy_raw
             for j in range(pred.size(0)):
@@ -406,6 +489,11 @@ if __name__ == "__main__":
     parser.add_argument("--ae_ckpt", type=str, default=None,
                         help="自编码器 checkpoint 路径（默认 checkpoints/ldm_hsi_autoencoder_best_phase3.pth）")
     parser.add_argument("--ae_base_ch", type=int, default=64)
+    parser.add_argument("--ae_arch", type=str, default="simple", choices=["simple", "res"],
+                        help="AE 架构: simple=旧 plain conv, res=残差 AE-v2")
+    parser.add_argument("--ae_res_blocks", type=int, default=2)
+    parser.add_argument("--lat_cache_dir", type=str, default=None,
+                        help="latent 缓存目录（默认 checkpoints/latent_cache_phase3{lat_tag}）")
     parser.add_argument("--base_ch", type=int, default=192, help="条件 U-Net 基础通道数")
     parser.add_argument("--depth", type=int, default=1, help="条件 U-Net 下采样级数(1=旧结构)")
     parser.add_argument("--module", type=str, default="none",
@@ -419,6 +507,16 @@ if __name__ == "__main__":
                         help="桥调度形状: linear=雾浓度严格线性(物理叙事)，ddpm=沿用 ᾱ 形状重标定")
     parser.add_argument("--sample_eta", type=float, default=0.0,
                         help="验证/测试采样步进噪声(0=确定性 DDIM 式, 1=与训练边缘分布一致)")
+    parser.add_argument("--val_steps", type=int, default=None,
+                        help="验证/可视化/终评的桥采样步数(默认=全步数100)。"
+                             "诊断已证实 eta=0 长轨迹误差累积(100步全测试集18.98dB vs 10步23.60dB)，"
+                             "best-ckpt 选择建议用 10 步对齐有效工作区间")
+    parser.add_argument("--ema", action="store_true",
+                        help="启用 EMA 权重平均（best/终评/最终交付均用 EMA 权重）")
+    parser.add_argument("--ema_decay", type=float, default=0.999)
+    parser.add_argument("--augment", action="store_true",
+                        help="随机二面体翻转增广（hflip/vflip 独立 p=0.5，hazy/clear 同步），"
+                             "针对无增广训练的过拟合；雾物理逐像素合成，翻转严格等变")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--epochs", type=int, default=300)
